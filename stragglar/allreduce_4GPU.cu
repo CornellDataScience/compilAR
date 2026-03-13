@@ -53,6 +53,8 @@ clock_t calculate_sleep_cycles(float ms, int* devs) {
   return sleep_cycles;
 }
 
+
+// THIS WILL CHANGE
 void direct_allreduce_helper(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, cudaEvent_t start, cudaEvent_t stop, int numRanks, int size) {
   for (int r = 0; r < numRanks; ++r) {
     cudaSetDevice(devs[r]);
@@ -96,7 +98,7 @@ void direct_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs, cu
   cudaEventRecord(start, 0);
 
   // sleep the straggler
-  cudaSetDevice(devs[3]);
+  cudaSetDevice(devs[3]); // CHANGE STRAGGLER
   gpu_sleep_kernel<<<1, 1, 0, streams[3]>>>(sleep_cycles);
 
   // Synchronize to make sure everything is idle
