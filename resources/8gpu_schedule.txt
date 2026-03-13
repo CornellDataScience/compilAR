@@ -1,0 +1,111 @@
+Round 0
+1 ['StragglerMatching: 0 <-> 7, chunk_id: 0']
+GPU 0 chunks [1. 0. 0. 0. 0. 0. 0.]
+GPU 1 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 2 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 3 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 4 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 5 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 6 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 7 chunks [1. 0. 0. 0. 0. 0. 0.]
+Active chunks {0: 1}
+----------------------------------------------
+Round 1
+2 ['StragglerMatching: 1 <-> 7, chunk_id: 1', 'OneWayMatching: 0 -> 3, chunk_id: 0']
+GPU 0 chunks [1. 0. 0. 0. 0. 0. 0.]
+GPU 1 chunks [0. 1. 0. 0. 0. 0. 0.]
+GPU 2 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 3 chunks [1. 0. 0. 0. 0. 0. 0.]
+GPU 4 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 5 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 6 chunks [0. 0. 0. 0. 0. 0. 0.]
+GPU 7 chunks [1. 1. 0. 0. 0. 0. 0.]
+Active chunks {0: 2, 1: 1}
+----------------------------------------------
+Round 2
+4 ['StragglerMatching: 2 <-> 7, chunk_id: 2', 'OneWayMatching: 1 -> 4, chunk_id: 1', 'OneWayMatching: 0 -> 5, chunk_id: 0', 'OneWayMatching: 3 -> 6, chunk_id: 0']
+GPU 0 chunks [1. 0. 0. 0. 0. 0. 0.]
+GPU 1 chunks [0. 1. 0. 0. 0. 0. 0.]
+GPU 2 chunks [0. 0. 1. 0. 0. 0. 0.]
+GPU 3 chunks [1. 0. 0. 0. 0. 0. 0.]
+GPU 4 chunks [0. 1. 0. 0. 0. 0. 0.]
+GPU 5 chunks [1. 0. 0. 0. 0. 0. 0.]
+GPU 6 chunks [1. 0. 0. 0. 0. 0. 0.]
+GPU 7 chunks [1. 1. 1. 0. 0. 0. 0.]
+Active chunks {0: 4, 1: 2, 2: 1}
+----------------------------------------------
+Round 3
+4 ['StragglerMatching: 3 <-> 7, chunk_id: 3', 'TwoWayMatching: 4 -> 0, chunk_id: 1; 0 -> 4, chunk_id: 0', 'TwoWayMatching: 5 -> 1, chunk_id: 0; 1 -> 5, chunk_id: 1', 'TwoWayMatching: 6 -> 2, chunk_id: 0; 2 -> 6, chunk_id: 2']
+GPU 0 chunks [1. 1. 0. 0. 0. 0. 0.]
+GPU 1 chunks [1. 1. 0. 0. 0. 0. 0.]
+GPU 2 chunks [1. 0. 1. 0. 0. 0. 0.]
+GPU 3 chunks [1. 0. 0. 1. 0. 0. 0.]
+GPU 4 chunks [1. 1. 0. 0. 0. 0. 0.]
+GPU 5 chunks [1. 1. 0. 0. 0. 0. 0.]
+GPU 6 chunks [1. 0. 1. 0. 0. 0. 0.]
+GPU 7 chunks [1. 1. 1. 1. 0. 0. 0.]
+Active chunks {1: 4, 2: 2, 3: 1}
+----------------------------------------------
+Round 4
+4 ['StragglerMatching: 4 <-> 7, chunk_id: 4', 'TwoWayMatching: 5 -> 2, chunk_id: 1; 2 -> 5, chunk_id: 2', 'TwoWayMatching: 6 -> 0, chunk_id: 2; 0 -> 6, chunk_id: 1', 'TwoWayMatching: 1 -> 3, chunk_id: 1; 3 -> 1, chunk_id: 3']
+GPU 0 chunks [1. 1. 1. 0. 0. 0. 0.]
+GPU 1 chunks [1. 1. 0. 1. 0. 0. 0.]
+GPU 2 chunks [1. 1. 1. 0. 0. 0. 0.]
+GPU 3 chunks [1. 1. 0. 1. 0. 0. 0.]
+GPU 4 chunks [1. 1. 0. 0. 1. 0. 0.]
+GPU 5 chunks [1. 1. 1. 0. 0. 0. 0.]
+GPU 6 chunks [1. 1. 1. 0. 0. 0. 0.]
+GPU 7 chunks [1. 1. 1. 1. 1. 0. 0.]
+Active chunks {2: 4, 3: 2, 4: 1}
+----------------------------------------------
+Round 5
+4 ['StragglerMatching: 5 <-> 7, chunk_id: 5', 'TwoWayMatching: 6 -> 1, chunk_id: 2; 1 -> 6, chunk_id: 3', 'TwoWayMatching: 0 -> 3, chunk_id: 2; 3 -> 0, chunk_id: 3', 'TwoWayMatching: 2 -> 4, chunk_id: 2; 4 -> 2, chunk_id: 4']
+GPU 0 chunks [1. 1. 1. 1. 0. 0. 0.]
+GPU 1 chunks [1. 1. 1. 1. 0. 0. 0.]
+GPU 2 chunks [1. 1. 1. 0. 1. 0. 0.]
+GPU 3 chunks [1. 1. 1. 1. 0. 0. 0.]
+GPU 4 chunks [1. 1. 1. 0. 1. 0. 0.]
+GPU 5 chunks [1. 1. 1. 0. 0. 1. 0.]
+GPU 6 chunks [1. 1. 1. 1. 0. 0. 0.]
+GPU 7 chunks [1. 1. 1. 1. 1. 1. 0.]
+Active chunks {3: 4, 4: 2, 5: 1}
+----------------------------------------------
+Round 6
+4 ['StragglerMatching: 6 <-> 7, chunk_id: 6', 'TwoWayMatching: 0 -> 2, chunk_id: 3; 2 -> 0, chunk_id: 4', 'TwoWayMatching: 1 -> 4, chunk_id: 3; 4 -> 1, chunk_id: 4', 'TwoWayMatching: 3 -> 5, chunk_id: 3; 5 -> 3, chunk_id: 5']
+GPU 0 chunks [1. 1. 1. 1. 1. 0. 0.]
+GPU 1 chunks [1. 1. 1. 1. 1. 0. 0.]
+GPU 2 chunks [1. 1. 1. 1. 1. 0. 0.]
+GPU 3 chunks [1. 1. 1. 1. 0. 1. 0.]
+GPU 4 chunks [1. 1. 1. 1. 1. 0. 0.]
+GPU 5 chunks [1. 1. 1. 1. 0. 1. 0.]
+GPU 6 chunks [1. 1. 1. 1. 0. 0. 1.]
+GPU 7 chunks [1. 1. 1. 1. 1. 1. 1.]
+Active chunks {4: 4, 5: 2, 6: 1}
+----------------------------------------------
+Round 7
+4 ['TwoWayMatching: 0 -> 3, chunk_id: 4; 3 -> 0, chunk_id: 5', 'TwoWayMatching: 1 -> 5, chunk_id: 4; 5 -> 1, chunk_id: 5', 'TwoWayMatching: 2 -> 6, chunk_id: 4; 6 -> 2, chunk_id: 6', 'OneWayMatching: 7 -> 4, chunk_id: 6']
+GPU 0 chunks [1. 1. 1. 1. 1. 1. 0.]
+GPU 1 chunks [1. 1. 1. 1. 1. 1. 0.]
+GPU 2 chunks [1. 1. 1. 1. 1. 0. 1.]
+GPU 3 chunks [1. 1. 1. 1. 1. 1. 0.]
+GPU 4 chunks [1. 1. 1. 1. 1. 0. 1.]
+GPU 5 chunks [1. 1. 1. 1. 1. 1. 0.]
+GPU 6 chunks [1. 1. 1. 1. 1. 0. 1.]
+GPU 7 chunks [1. 1. 1. 1. 1. 1. 1.]
+Active chunks {5: 4, 6: 3}
+----------------------------------------------
+Round 8
+4 ['TwoWayMatching: 0 -> 2, chunk_id: 5; 2 -> 0, chunk_id: 6', 'TwoWayMatching: 1 -> 4, chunk_id: 5; 4 -> 1, chunk_id: 6', 'TwoWayMatching: 3 -> 6, chunk_id: 5; 6 -> 3, chunk_id: 6', 'OneWayMatching: 7 -> 5, chunk_id: 6']
+GPU 0 chunks [1. 1. 1. 1. 1. 1. 1.]
+GPU 1 chunks [1. 1. 1. 1. 1. 1. 1.]
+GPU 2 chunks [1. 1. 1. 1. 1. 1. 1.]
+GPU 3 chunks [1. 1. 1. 1. 1. 1. 1.]
+GPU 4 chunks [1. 1. 1. 1. 1. 1. 1.]
+GPU 5 chunks [1. 1. 1. 1. 1. 1. 1.]
+GPU 6 chunks [1. 1. 1. 1. 1. 1. 1.]
+GPU 7 chunks [1. 1. 1. 1. 1. 1. 1.]
+Active chunks {}
+----------------------------------------------
+Time taken: 0.0030329227447509766
+Actual number of rounds 9
+Optimal number of rounds 9.0
