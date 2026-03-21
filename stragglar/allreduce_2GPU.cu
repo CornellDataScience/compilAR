@@ -41,11 +41,11 @@ __global__ void fill_pattern(float* dst, float v, size_t n) {
 
 // calculate the ms for straggler
 clock_t calculate_sleep_cycles(float ms, int* devs) {
-  cudaSetDevice(devs[3]);
+  cudaSetDevice(devs[1]);
 
   // Query clock rate (in kHz)
   int clockRate_kHz;
-  cudaDeviceGetAttribute(&clockRate_kHz, cudaDevAttrClockRate, devs[3]);
+  cudaDeviceGetAttribute(&clockRate_kHz, cudaDevAttrClockRate, devs[1]);
 
   // Compute number of cycles to sleep
   clock_t sleep_cycles = static_cast<clock_t>(ms * clockRate_kHz);
@@ -98,8 +98,8 @@ void direct_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs, cu
   cudaEventRecord(start, 0);
 
   // sleep the straggler
-  cudaSetDevice(devs[3]); // CHANGE STRAGGLER
-  gpu_sleep_kernel<<<1, 1, 0, streams[3]>>>(sleep_cycles);
+  cudaSetDevice(devs[1]); // CHANGE STRAGGLER
+  gpu_sleep_kernel<<<1, 1, 0, streams[1]>>>(sleep_cycles);
 
   // Synchronize to make sure everything is idle
   for (int r = 0; r < numRanks - 1; ++r) {
@@ -298,26 +298,41 @@ void rhd_allreduce(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_
   rhd_allreduce_helper(d_buffers, d_tempbufs, devs, streams, comms, start, stop, numRanks, chunkSize);
 }
 
-void stragglar_allreduce_helper(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, int numRanks, int chunkSize) {
-  // Ensure all streams are idle before running generated schedule.
+void stragglar_allreduce_helper(float** d_buffers, float** d_tempbufs, int* devs,
+    cudaStream_t* streams, ncclComm_t* comms,
+    cudaEvent_t start, cudaEvent_t stop,
+    int numRanks, int chunkSize) {
+
+  int numBlocks = (chunkSize + 128 - 1) / 128;
+
   for (int r = 0; r < numRanks; ++r) {
     cudaSetDevice(devs[r]);
     cudaStreamSynchronize(streams[r]);
   }
 
-  // Round 0
-  ncclGroupStart();
-  ncclSend(d_buffers[0], chunkSize, ncclFloat, 1, comms[0], streams[0]);
-  ncclRecv(d_tempbufs[1], chunkSize, ncclFloat, 0, comms[1], streams[1]);
-  ncclSend(d_buffers[1], chunkSize, ncclFloat, 0, comms[1], streams[1]);
-  ncclRecv(d_tempbufs[0], chunkSize, ncclFloat, 1, comms[0], streams[0]);
-  ncclGroupEnd();
-  // Apply local reduction for newly received chunks.
+  // step 1
+  CHECK_NCCL(ncclGroupStart());
   cudaSetDevice(devs[1]);
-  reduce_add<<<(chunkSize + 128 - 1) / 128, 128, 0, streams[1]>>>(d_buffers[1], d_tempbufs[1], chunkSize);
+  CHECK_NCCL(ncclSend(d_buffers[1], chunkSize, ncclFloat, 0, comms[1], streams[1]));
+  CHECK_NCCL(ncclRecv(d_tempbufs[1], chunkSize, ncclFloat, 0, comms[1], streams[1]));
   cudaSetDevice(devs[0]);
-  reduce_add<<<(chunkSize + 128 - 1) / 128, 128, 0, streams[0]>>>(d_buffers[0], d_tempbufs[0], chunkSize);
+  CHECK_NCCL(ncclRecv(d_tempbufs[0], chunkSize, ncclFloat, 1, comms[0], streams[0]));
+  CHECK_NCCL(ncclSend(d_buffers[0], chunkSize, ncclFloat, 1, comms[0], streams[0]));
+  CHECK_NCCL(ncclGroupEnd());
+  // DEBUG: check if recv worked
+  cudaSetDevice(devs[0]);
+  cudaStreamSynchronize(streams[0]);
+  float dbg[4];
+  cudaMemcpy(dbg, d_tempbufs[0], 4*sizeof(float), cudaMemcpyDeviceToHost);
+  printf("DEBUG tempbufs[0]: %.3f %.3f %.3f %.3f\n", dbg[0], dbg[1], dbg[2], dbg[3]);
+  cudaSetDevice(devs[0]);
+  reduce_add<<<numBlocks, 128, 0, streams[0]>>>(d_buffers[0], d_tempbufs[0], chunkSize);
+  cudaSetDevice(devs[1]);
+  reduce_add<<<numBlocks, 128, 0, streams[1]>>>(d_buffers[1], d_tempbufs[1], chunkSize);
 
+  cudaSetDevice(devs[0]);
+  cudaEventRecord(stop, 0);
+  cudaEventSynchronize(stop);
 }
 
 void stragglar_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, ncclComm_t* subComms, cudaEvent_t start, cudaEvent_t stop, int numRanks, int size, clock_t sleep_cycles) {
@@ -325,21 +340,21 @@ void stragglar_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs,
   cudaSetDevice(devs[0]);
   cudaEventRecord(start, 0);
 
-  cudaSetDevice(devs[3]);
-  gpu_sleep_kernel<<<1, 1, 0, streams[3]>>>(sleep_cycles);
+  cudaSetDevice(devs[1]);
+  gpu_sleep_kernel<<<1, 1, 0, streams[1]>>>(sleep_cycles);
 
-  // Synchronize to make sure everything is idle
-  for (int r = 0; r < numRanks - 1; ++r) {
-    cudaSetDevice(devs[r]);
-    cudaStreamSynchronize(streams[r]);
-  }
+//   // Synchronize to make sure everything is idle
+//   for (int r = 0; r < numRanks - 1; ++r) {
+//     cudaSetDevice(devs[r]);
+//     cudaStreamSynchronize(streams[r]);
+//   }
 
-  ncclGroupStart();
-  for (int r = 0; r < numRanks - 1; ++r) {
-    cudaSetDevice(devs[r]);
-    ncclReduceScatter(d_buffers[r], d_buffers[r] + (r * chunkSize), chunkSize, ncclFloat, ncclSum, subComms[r], streams[r]);
-  }
-  ncclGroupEnd();
+//   ncclGroupStart();
+//   for (int r = 0; r < numRanks - 1; ++r) {
+//     cudaSetDevice(devs[r]);
+//     ncclReduceScatter(d_buffers[r], d_buffers[r] + (r * chunkSize), chunkSize, ncclFloat, ncclSum, subComms[r], streams[r]);
+//   }
+//   ncclGroupEnd();
 
   stragglar_allreduce_helper(d_buffers, d_tempbufs, devs, streams, comms, start, stop, numRanks, chunkSize);
 }
@@ -423,79 +438,66 @@ int main(int argc, char* argv[]) {
     CHECK_CUDA(cudaSetDevice(devs[i]));
     CHECK_CUDA(cudaStreamCreate(&streams[i]));
     CHECK_CUDA(cudaMallocAsync(&d_buffers[i], size * sizeof(float), streams[i]));
-    if (strcmp(argv[2], "ring") == 0 || strcmp(argv[2], "stragglar") == 0) {
-      CHECK_CUDA(cudaMallocAsync(&d_tempbufs[i], chunkSize * sizeof(float), streams[i]));
+    if (strcmp(argv[2], "stragglar") == 0) {
+        CHECK_CUDA(cudaMallocAsync(&d_tempbufs[i], chunkSize * sizeof(float), streams[i]));
     }
-    else if (strcmp(argv[2], "rhd") == 0) {
-      CHECK_CUDA(cudaMallocAsync(&d_tempbufs[i], 2 * chunkSize * sizeof(float), streams[i]));
-    }
-    else if (strcmp(argv[2], "direct") == 0) {
-      CHECK_CUDA(cudaMallocAsync(&d_tempbufs[i], size * sizeof(float), streams[i]));
-    }
-  }
+}
 
-  // warmup
-  for (int iter = 0; iter < 10; ++iter) {
-    // step 1
-    ncclGroupStart();
-    ncclSend(d_buffers[0], chunkSize, ncclFloat, 1, comms[0], streams[0]);
-    ncclRecv(d_tempbufs[0], chunkSize, ncclFloat, 1, comms[0], streams[0]);
+//   // warmup
+//   for (int iter = 0; iter < 10; ++iter) {
+//     // step 1
+//     ncclGroupStart();
+//     ncclSend(d_buffers[0], chunkSize, ncclFloat, 1, comms[0], streams[0]);
+//     ncclRecv(d_tempbufs[0], chunkSize, ncclFloat, 1, comms[0], streams[0]);
 
-    ncclSend(d_buffers[1], chunkSize, ncclFloat, 0, comms[1], streams[1]);
-    ncclRecv(d_tempbufs[1], chunkSize, ncclFloat, 0, comms[1], streams[1]);
+//     ncclSend(d_buffers[1], chunkSize, ncclFloat, 0, comms[1], streams[1]);
+//     ncclRecv(d_tempbufs[1], chunkSize, ncclFloat, 0, comms[1], streams[1]);
 
-    ncclSend(d_buffers[2], chunkSize, ncclFloat, 3, comms[2], streams[2]);
-    ncclRecv(d_tempbufs[2], chunkSize, ncclFloat, 3, comms[2], streams[2]);
+//     ncclSend(d_buffers[2], chunkSize, ncclFloat, 3, comms[2], streams[2]);
+//     ncclRecv(d_tempbufs[2], chunkSize, ncclFloat, 3, comms[2], streams[2]);
     
-    ncclSend(d_buffers[3], chunkSize, ncclFloat, 2, comms[3], streams[3]);
-    ncclRecv(d_tempbufs[3], chunkSize, ncclFloat, 2, comms[3], streams[3]);
-    ncclGroupEnd();
+//     ncclSend(d_buffers[3], chunkSize, ncclFloat, 2, comms[3], streams[3]);
+//     ncclRecv(d_tempbufs[3], chunkSize, ncclFloat, 2, comms[3], streams[3]);
+//     ncclGroupEnd();
 
-    // step 2
-    ncclGroupStart();
-    ncclSend(d_buffers[0], chunkSize, ncclFloat, 2, comms[0], streams[0]);
-    ncclRecv(d_tempbufs[0], chunkSize, ncclFloat, 2, comms[0], streams[0]);
+//     // step 2
+//     ncclGroupStart();
+//     ncclSend(d_buffers[0], chunkSize, ncclFloat, 2, comms[0], streams[0]);
+//     ncclRecv(d_tempbufs[0], chunkSize, ncclFloat, 2, comms[0], streams[0]);
 
-    ncclSend(d_buffers[1], chunkSize, ncclFloat, 3, comms[1], streams[1]);
-    ncclRecv(d_tempbufs[1], chunkSize, ncclFloat, 3, comms[1], streams[1]);
+//     ncclSend(d_buffers[1], chunkSize, ncclFloat, 3, comms[1], streams[1]);
+//     ncclRecv(d_tempbufs[1], chunkSize, ncclFloat, 3, comms[1], streams[1]);
 
-    ncclSend(d_buffers[2], chunkSize, ncclFloat, 0, comms[2], streams[2]);
-    ncclRecv(d_tempbufs[2], chunkSize, ncclFloat, 0, comms[2], streams[2]);
+//     ncclSend(d_buffers[2], chunkSize, ncclFloat, 0, comms[2], streams[2]);
+//     ncclRecv(d_tempbufs[2], chunkSize, ncclFloat, 0, comms[2], streams[2]);
    
-    ncclSend(d_buffers[3], chunkSize, ncclFloat, 1, comms[3], streams[3]);
-    ncclRecv(d_tempbufs[3], chunkSize, ncclFloat, 1, comms[3], streams[3]);
-    ncclGroupEnd();
+//     ncclSend(d_buffers[3], chunkSize, ncclFloat, 1, comms[3], streams[3]);
+//     ncclRecv(d_tempbufs[3], chunkSize, ncclFloat, 1, comms[3], streams[3]);
+//     ncclGroupEnd();
 
-    // step 3
-    ncclGroupStart();
-    ncclSend(d_buffers[0], chunkSize, ncclFloat, 3, comms[0], streams[0]);
-    ncclRecv(d_tempbufs[0], chunkSize, ncclFloat, 3, comms[0], streams[0]);
+//     // step 3
+//     ncclGroupStart();
+//     ncclSend(d_buffers[0], chunkSize, ncclFloat, 3, comms[0], streams[0]);
+//     ncclRecv(d_tempbufs[0], chunkSize, ncclFloat, 3, comms[0], streams[0]);
 
-    ncclSend(d_buffers[1], chunkSize, ncclFloat, 2, comms[1], streams[1]);
-    ncclRecv(d_tempbufs[1], chunkSize, ncclFloat, 2, comms[1], streams[1]);
+//     ncclSend(d_buffers[1], chunkSize, ncclFloat, 2, comms[1], streams[1]);
+//     ncclRecv(d_tempbufs[1], chunkSize, ncclFloat, 2, comms[1], streams[1]);
 
-    ncclSend(d_buffers[2], chunkSize, ncclFloat, 1, comms[2], streams[2]);
-    ncclRecv(d_tempbufs[2], chunkSize, ncclFloat, 1, comms[2], streams[2]);
+//     ncclSend(d_buffers[2], chunkSize, ncclFloat, 1, comms[2], streams[2]);
+//     ncclRecv(d_tempbufs[2], chunkSize, ncclFloat, 1, comms[2], streams[2]);
    
-    ncclSend(d_buffers[3], chunkSize, ncclFloat, 0, comms[3], streams[3]);
-    ncclRecv(d_tempbufs[3], chunkSize, ncclFloat, 0, comms[3], streams[3]);
-    ncclGroupEnd();
-  }
+//     ncclSend(d_buffers[3], chunkSize, ncclFloat, 0, comms[3], streams[3]);
+//     ncclRecv(d_tempbufs[3], chunkSize, ncclFloat, 0, comms[3], streams[3]);
+//     ncclGroupEnd();
+//   }
 
   printf("algorithm,buffer_size_bytes,iteration,delay,runtime_ms,BW(GB/s)\n");
   for (int iter = 0; iter < numIters + 1; ++iter) {
     // Reset buffers if needed (same init pattern as above)
     for (int i = 0; i < numRanks; ++i) {
-      CHECK_CUDA(cudaSetDevice(devs[i]));
-      if (sleepTime < 0 && strcmp(alg,"direct")==0 && i < numRanks-1) {
-        fill_pattern<<<(size+255)/256, 256, 0, streams[i] >>>(d_buffers[i], 3.f, size);
-      } else{
-        fill_pattern<<<(size+255)/256, 256, 0, streams[i] >>>(d_buffers[i], float(i), size);
-      }
-      if (sleepTime < 0 && strcmp(alg, "stragglar") == 0 && i < numRanks - 1) {
-        fill_pattern<<< (chunkSize+255)/256, 256, 0, streams[i] >>>(d_buffers[i] + i*chunkSize, 3.f, chunkSize);
-      }
-    }
+    CHECK_CUDA(cudaSetDevice(devs[i]));
+    fill_pattern<<<(size+255)/256, 256, 0, streams[i]>>>(d_buffers[i], float(i), size);
+}
 
     for (int i = 0; i < numRanks; ++i) {
       CHECK_CUDA(cudaSetDevice(devs[i]));
@@ -549,7 +551,7 @@ int main(int argc, char* argv[]) {
     CHECK_CUDA(cudaMemcpy(hostOut, d_buffers[r],
                           size * sizeof(float), cudaMemcpyDeviceToHost));
     for (int i = 0; i < size; ++i) {
-      if (hostOut[i] != 6.0) {
+      if (hostOut[i] != 1.0) {
         printf("Rank %d, idx %d, val %.3f\n", r, i, hostOut[i]);
       }
     }
