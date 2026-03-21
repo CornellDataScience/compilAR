@@ -1,0 +1,9 @@
+Round 0
+1 ['StragglerMatching: 0 <-> 1, chunk_id: 0']
+GPU 0 chunks [1.]
+GPU 1 chunks [1.]
+Active chunks {}
+----------------------------------------------
+Time taken: 0.00721430778503418
+Actual number of rounds 1
+Optimal number of rounds 1.0
