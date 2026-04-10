@@ -69,7 +69,7 @@ clock_t calculate_sleep_cycles(float ms, int* devs) {
 }
 
 
-void stragglar_allreduce_helper(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, cudaEvent_t start, cudaEvent_t stop, int numRanks, int chunkSize) {
+void stragglar_allreduce_helper(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, cudaEvent_t start, cudaEvent_t stop, int NUM_RANKS, int chunkSize) {
   int numBlocks = (chunkSize + 128 - 1) / 128;
 
   for (int r = 0; r < NUM_RANKS; ++r) {
@@ -140,7 +140,7 @@ void stragglar_allreduce_helper(float** d_buffers, float** d_tempbufs, int* devs
   cudaEventSynchronize(stop);
 }
 
-void stragglar_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, ncclComm_t* subComms, cudaEvent_t start, cudaEvent_t stop, int numRanks, int size, clock_t sleep_cycles) {
+void stragglar_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, ncclComm_t* subComms, cudaEvent_t start, cudaEvent_t stop, int NUM_RANKS, int size, clock_t sleep_cycles) {
   int chunkSize = size / (NUM_RANKS - 1);
   cudaSetDevice(devs[0]);
   cudaEventRecord(start, 0);
@@ -164,7 +164,7 @@ void stragglar_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs,
   stragglar_allreduce_helper(d_buffers, d_tempbufs, devs, streams, comms, start, stop, NUM_RANKS, chunkSize);
 }
 
-void stragglar_allreduce(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, cudaEvent_t start, cudaEvent_t stop, int numRanks, int size) {
+void stragglar_allreduce(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, cudaEvent_t start, cudaEvent_t stop, int NUM_RANKS, int size) {
     int chunkSize = size / (NUM_RANKS - 1);
     cudaSetDevice(devs[0]);
     cudaEventRecord(start, 0);
@@ -236,7 +236,7 @@ int main(int argc, char* argv[]) {
   CHECK_CUDA(cudaEventCreate(&stop));
   // use the first gpu to time the operation
 
-  CHECK_NCCL(ncclCommInitAll(comms, numRanks, devs));
+  CHECK_NCCL(ncclCommInitAll(comms, NUM_RANKS, devs));
   if (sleepTime >= 0) {
     CHECK_NCCL(ncclCommInitAll(subComms, NUM_RANKS - 1, NULL));
   }
@@ -276,10 +276,10 @@ int main(int argc, char* argv[]) {
 
     // Run algorithm 
     if (sleepTime >= 0) {   // identified straggler 
-        stragglar_allreduce_delay(d_buffers, d_tempbufs, devs, streams, comms, subComms, start, stop, numRanks, size, sleep_cycles);
+        stragglar_allreduce_delay(d_buffers, d_tempbufs, devs, streams, comms, subComms, start, stop, NUM_RANKS, size, sleep_cycles);
     } 
     else {    // no straggler identified
-        stragglar_allreduce(d_buffers, d_tempbufs, devs, streams, comms, start, stop, numRanks, size);
+        stragglar_allreduce(d_buffers, d_tempbufs, devs, streams, comms, start, stop, NUM_RANKS, size);
     }
 
     float ms;
@@ -303,12 +303,12 @@ int main(int argc, char* argv[]) {
   
   // could we set up CUDA managed memory?
   float* hostOut = (float*)malloc(size * sizeof(float));    // copy GPU results to some host CPU; need buffer
-  for (int r = 0; r < numRanks; ++r) {
+  for (int r = 0; r < NUM_RANKS; ++r) {
     CHECK_CUDA(cudaSetDevice(devs[r]));
     CHECK_CUDA(cudaMemcpy(hostOut, d_buffers[r],
                           size * sizeof(float), cudaMemcpyDeviceToHost));
     for (int i = 0; i < size; ++i) {
-      if (hostOut[i] != kExpectedSum) {     // maybe do val_per_rank * numRanks, where val_per_rank is initialized at beginning
+      if (hostOut[i] != kExpectedSum) {     // maybe do val_per_rank * NUM_RANKS, where val_per_rank is initialized at beginning
 
         printf("Rank %d, idx %d, val %.3f\n", r, i, hostOut[i]);
       }
@@ -328,7 +328,7 @@ int main(int argc, char* argv[]) {
     cudaFree(d_tempbufs[i]);
     cudaStreamDestroy(streams[i]);
     ncclCommDestroy(comms[i]);
-    if (sleepTime >= 0 && i < numRanks - 1) {
+    if (sleepTime >= 0 && i < NUM_RANKS - 1) {
       ncclCommDestroy(subComms[i]);
     }
     printf("Rank %d, done\n", i);
