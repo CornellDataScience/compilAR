@@ -69,10 +69,10 @@ clock_t calculate_sleep_cycles(float ms, int* devs) {
 }
 
 
-void stragglar_allreduce_helper(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, cudaEvent_t start, cudaEvent_t stop, int numRanks, int chunkSize) {
+void stragglar_allreduce_helper(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, cudaEvent_t start, cudaEvent_t stop, int NUM_RANKS, int chunkSize) {
   int numBlocks = (chunkSize + 128 - 1) / 128;
 
-  for (int r = 0; r < numRanks; ++r) {
+  for (int r = 0; r < NUM_RANKS; ++r) {
     cudaSetDevice(devs[r]);
     cudaStreamSynchronize(streams[r]);
   }
@@ -140,8 +140,8 @@ void stragglar_allreduce_helper(float** d_buffers, float** d_tempbufs, int* devs
   cudaEventSynchronize(stop);
 }
 
-void stragglar_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, ncclComm_t* subComms, cudaEvent_t start, cudaEvent_t stop, int numRanks, int size, clock_t sleep_cycles) {
-  int chunkSize = size / (numRanks - 1);
+void stragglar_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, ncclComm_t* subComms, cudaEvent_t start, cudaEvent_t stop, int NUM_RANKS, int size, clock_t sleep_cycles) {
+  int chunkSize = size / (NUM_RANKS - 1);
   cudaSetDevice(devs[0]);
   cudaEventRecord(start, 0);
   // set stragglar
@@ -149,26 +149,26 @@ void stragglar_allreduce_delay(float** d_buffers, float** d_tempbufs, int* devs,
   gpu_sleep_kernel<<<1, 1, 0, streams[NUM_RANKS - 1]>>>(sleep_cycles); // sleeps the GPU
 
   // Synchronize to make sure everything is idle
-  for (int r = 0; r < numRanks - 1; ++r) {
+  for (int r = 0; r < NUM_RANKS - 1; ++r) {
     cudaSetDevice(devs[r]);
     cudaStreamSynchronize(streams[r]);
   }
 
   ncclGroupStart();
-  for (int r = 0; r < numRanks - 1; ++r) {
+  for (int r = 0; r < NUM_RANKS - 1; ++r) {
     cudaSetDevice(devs[r]);
     ncclReduceScatter(d_buffers[r], d_buffers[r] + (r * chunkSize), chunkSize, ncclFloat, ncclSum, subComms[r], streams[r]);
   }
   ncclGroupEnd();
 
-  stragglar_allreduce_helper(d_buffers, d_tempbufs, devs, streams, comms, start, stop, numRanks, chunkSize);
+  stragglar_allreduce_helper(d_buffers, d_tempbufs, devs, streams, comms, start, stop, NUM_RANKS, chunkSize);
 }
 
-void stragglar_allreduce(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, cudaEvent_t start, cudaEvent_t stop, int numRanks, int size) {
-    int chunkSize = size / (numRanks - 1);
+void stragglar_allreduce(float** d_buffers, float** d_tempbufs, int* devs, cudaStream_t* streams, ncclComm_t* comms, cudaEvent_t start, cudaEvent_t stop, int NUM_RANKS, int size) {
+    int chunkSize = size / (NUM_RANKS - 1);
     cudaSetDevice(devs[0]);
     cudaEventRecord(start, 0);
-    stragglar_allreduce_helper(d_buffers, d_tempbufs, devs, streams, comms, start, stop, numRanks, chunkSize);
+    stragglar_allreduce_helper(d_buffers, d_tempbufs, devs, streams, comms, start, stop, NUM_RANKS, chunkSize);
 }
 
 int main(int argc, char* argv[]) {
@@ -210,7 +210,7 @@ int main(int argc, char* argv[]) {
   int devs[NUM_RANKS];
 
   // [0, 1, 2, 3] for 4 gpus, e.g.
-  for (int i = 0; i < numRanks; ++i) devs[i] = i;
+  for (int i = 0; i < NUM_RANKS; ++i) devs[i] = i;
 
   // Allocate device buffers
   float* d_buffers[NUM_RANKS]; // each device has a buffer
@@ -236,18 +236,18 @@ int main(int argc, char* argv[]) {
   CHECK_CUDA(cudaEventCreate(&stop));
   // use the first gpu to time the operation
 
-  CHECK_NCCL(ncclCommInitAll(comms, numRanks, devs));
+  CHECK_NCCL(ncclCommInitAll(comms, NUM_RANKS, devs));
   if (sleepTime >= 0) {
-    CHECK_NCCL(ncclCommInitAll(subComms, numRanks - 1, NULL));
+    CHECK_NCCL(ncclCommInitAll(subComms, NUM_RANKS - 1, NULL));
   }
   // initializing the comms
   
   // size of the chunks
   size_t chunkSize;
-  chunkSize = size / (numRanks - 1);
+  chunkSize = size / (NUM_RANKS - 1);
   
   
-  for (int i = 0; i < numRanks; ++i) {
+  for (int i = 0; i < NUM_RANKS; ++i) {
     CHECK_CUDA(cudaSetDevice(devs[i])); 
     CHECK_CUDA(cudaStreamCreate(&streams[i]));
     CHECK_CUDA(cudaMallocAsync(&d_buffers[i], size * sizeof(float), streams[i])); // dbuffer is where all the data ends up
@@ -260,7 +260,7 @@ int main(int argc, char* argv[]) {
   printf("algorithm,buffer_size_bytes,iteration,delay,runtime_ms,BW(GB/s)\n");
   for (int iter = 0; iter < numIters + 1; ++iter) {
     // Reset buffers if needed (same init pattern as above)
-    for (int i = 0; i < numRanks; ++i) {
+    for (int i = 0; i < NUM_RANKS; ++i) {
       CHECK_CUDA(cudaSetDevice(devs[i]));
     
       // kernel to fill all gpu buffers with the value, but it just does it in parallel
@@ -269,17 +269,17 @@ int main(int argc, char* argv[]) {
     }
 
     
-    for (int i = 0; i < numRanks; ++i) {
+    for (int i = 0; i < NUM_RANKS; ++i) {
       CHECK_CUDA(cudaSetDevice(devs[i]));
       CHECK_CUDA(cudaStreamSynchronize(streams[i])); // waits until everything in the queue was done
     }
 
     // Run algorithm 
     if (sleepTime >= 0) {   // identified straggler 
-        stragglar_allreduce_delay(d_buffers, d_tempbufs, devs, streams, comms, subComms, start, stop, numRanks, size, sleep_cycles);
+        stragglar_allreduce_delay(d_buffers, d_tempbufs, devs, streams, comms, subComms, start, stop, NUM_RANKS, size, sleep_cycles);
     } 
     else {    // no straggler identified
-        stragglar_allreduce(d_buffers, d_tempbufs, devs, streams, comms, start, stop, numRanks, size);
+        stragglar_allreduce(d_buffers, d_tempbufs, devs, streams, comms, start, stop, NUM_RANKS, size);
     }
 
     float ms;
@@ -303,12 +303,12 @@ int main(int argc, char* argv[]) {
   
   // could we set up CUDA managed memory?
   float* hostOut = (float*)malloc(size * sizeof(float));    // copy GPU results to some host CPU; need buffer
-  for (int r = 0; r < numRanks; ++r) {
+  for (int r = 0; r < NUM_RANKS; ++r) {
     CHECK_CUDA(cudaSetDevice(devs[r]));
     CHECK_CUDA(cudaMemcpy(hostOut, d_buffers[r],
                           size * sizeof(float), cudaMemcpyDeviceToHost));
     for (int i = 0; i < size; ++i) {
-      if (hostOut[i] != kExpectedSum) {     // maybe do val_per_rank * numRanks, where val_per_rank is initialized at beginning
+      if (hostOut[i] != kExpectedSum) {     // maybe do val_per_rank * NUM_RANKS, where val_per_rank is initialized at beginning
 
         printf("Rank %d, idx %d, val %.3f\n", r, i, hostOut[i]);
       }
@@ -316,19 +316,19 @@ int main(int argc, char* argv[]) {
   }
   free(hostOut);
 
-  for (int i = 0; i < numRanks; ++i) {
+  for (int i = 0; i < NUM_RANKS; ++i) {
     cudaSetDevice(devs[i]);
     cudaStreamSynchronize(streams[i]);      // block CPU until every enqued operation in streams[i] is completed on GPU
   }
 
   // Cleanup
-  for (int i = 0; i < numRanks; ++i) {
+  for (int i = 0; i < NUM_RANKS; ++i) {
     cudaSetDevice(devs[i]);
     cudaFree(d_buffers[i]);
     cudaFree(d_tempbufs[i]);
     cudaStreamDestroy(streams[i]);
     ncclCommDestroy(comms[i]);
-    if (sleepTime >= 0 && i < numRanks - 1) {
+    if (sleepTime >= 0 && i < NUM_RANKS - 1) {
       ncclCommDestroy(subComms[i]);
     }
     printf("Rank %d, done\n", i);
