@@ -175,7 +175,7 @@ void stragglar_allreduce_delay(
 {
   int chunkSize = (int)(size / (numRanks - 1));
 
-  // Barrier so all ranks start the clock at the same wall-clock moment
+  // Barrier so that all ranks start the clock at the same wall-clock moment
   MPI_Barrier(MPI_COMM_WORLD);
   if (myRank == 0) cudaEventRecord(start, 0);
 
