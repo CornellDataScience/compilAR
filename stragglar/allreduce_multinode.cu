@@ -313,9 +313,12 @@ int main(int argc, char* argv[]) {
 
   // Main benchmark loop
   for (int iter = 0; iter < numIters + 1; ++iter) {
-    // Each rank fills only its designated chunk (matches single-node behavior)
-    fill_pattern<<<(chunkSize + kFillThreads - 1) / kFillThreads, kFillThreads, 0, stream>>>(
-        d_buffer + myRank * chunkSize, kFillValue, chunkSize);
+    // Each rank fills its designated chunk. Rank kStragglerRank (rank 3) has
+    // no valid chunk in the buffer (buffer holds numRanks-1 chunks), so skip it.
+    if ((size_t)myRank * chunkSize < size) {
+      fill_pattern<<<(chunkSize + kFillThreads - 1) / kFillThreads, kFillThreads, 0, stream>>>(
+          d_buffer + myRank * chunkSize, kFillValue, chunkSize);
+    }
     CHECK_CUDA(cudaStreamSynchronize(stream));
 
     if (sleepTime >= 0) {
