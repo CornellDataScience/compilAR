@@ -1,0 +1,44 @@
+#!/bin/bash
+###############################################################################
+# smoketest.sub — SLURM batch script for GPU straggler smoke test
+#
+# Submit:
+#   sbatch --requeue smoketest.sub
+#
+# To override GPU count at submission time:
+#   sbatch --requeue --gres=gpu:nvidia_rtx_6000_ada_generation:8 smoketest.sub
+###############################################################################
+
+# NOTE: #SBATCH directives must come before any shell commands — SLURM stops
+# parsing them at the first executable line.
+
+#SBATCH -J smoketest
+#SBATCH -o ../logs/smoketest_%j.out
+#SBATCH -e ../logs/smoketest_%j.err
+#SBATCH -N 1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16000
+#SBATCH -t 0:30:00
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:nvidia_rtx_6000_ada_generation:4
+#SBATCH --mail-user=mk2664@cornell.edu
+
+# =============================================================================
+# Preamble — edit these before submitting
+# =============================================================================
+LOG_DIR="../logs"      # output directory for .out / .err files (must exist)
+NUM_GPUS=4             # reflected in --gres below; override at sbatch call if needed
+# =============================================================================
+
+echo "============================================================"
+echo " GPU Straggler Smoke Test"
+echo " Job ID       : $SLURM_JOB_ID"
+echo " Nodes        : $SLURM_JOB_NUM_NODES"
+echo " GPUs/node    : $SLURM_GPUS_ON_NODE"
+echo " Node list    : $SLURM_JOB_NODELIST"
+echo " Date         : $(date)"
+echo "============================================================"
+
+mkdir -p "$LOG_DIR"
+
+srun /home/mk2664/compilAR/.venv/bin/python smoketest.py "$@"
