@@ -299,8 +299,8 @@ int main(int argc, char* argv[]) {
 
   float* d_buffer;
   float* d_tempbuf;
-  CHECK_CUDA(cudaMallocAsync(&d_buffer,  size      * sizeof(float), stream));
-  CHECK_CUDA(cudaMallocAsync(&d_tempbuf, chunkSize * sizeof(float), stream));
+  CHECK_CUDA(cudaMalloc(&d_buffer,  size      * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_tempbuf, chunkSize * sizeof(float)));
 
   clock_t sleep_cycles = 0;
   if (sleepTime >= 0 && myRank == kStragglerRank) {
