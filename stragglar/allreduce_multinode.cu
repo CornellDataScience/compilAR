@@ -285,6 +285,10 @@ int main(int argc, char* argv[]) {
       CHECK_MPI(MPI_Bcast(&subId, sizeof(subId), MPI_BYTE, 0, subMpiComm));
       CHECK_NCCL(ncclCommInitRank(&subComm, subSize, subId, subRank));
     }
+    // Rank 3 must wait for ranks 0-2 to finish subComm init before any rank
+    // proceeds. Without this, rank 3 races into the benchmark loop while NCCL
+    // is still scanning GPU topology on compute4, corrupting rank 3's CUDA context.
+    CHECK_MPI(MPI_Barrier(MPI_COMM_WORLD));
   }
 
   // CUDA resources
