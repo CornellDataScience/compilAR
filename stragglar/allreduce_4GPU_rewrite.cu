@@ -262,10 +262,14 @@ int main(int argc, char* argv[]) {
     // Reset buffers if needed (same init pattern as above)
     for (int i = 0; i < NUM_RANKS; ++i) {
       CHECK_CUDA(cudaSetDevice(devs[i]));
-    
-      // kernel to fill all gpu buffers with the value, but it just does it in parallel
-      fill_pattern<<< (chunkSize+255)/256, 256, 0, streams[i] >>>(d_buffers[i] + i*chunkSize, kFillValue, chunkSize); // fill dbuffers[i] + i * chunkSize with 
-        // number of blocks, number threads per block, memory allocated per thread
+
+      if (i == kStragglerRank) {
+        fill_pattern<<<(size + 255) / 256, 256, 0, streams[i]>>>(d_buffers[i], kFillValue, size);
+      } else {
+        // Non-straggler: zero entire buffer, then fill own chunk
+        CHECK_CUDA(cudaMemsetAsync(d_buffers[i], 0, size * sizeof(float), streams[i]));
+        fill_pattern<<<(chunkSize + 255) / 256, 256, 0, streams[i]>>>(d_buffers[i] + i * chunkSize, kFillValue, chunkSize);
+      }
     }
 
     
