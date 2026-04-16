@@ -17,8 +17,8 @@ import socket
 
 import torch
 
-from batch_compute import run_batch_compute
-from detect_straggler import identify_straggler
+from stragglar.smoketest.batch_compute import run_batch_compute
+from stragglar.smoketest.detect_straggler import identify_straggler
 
 
 def print_results(result, hostname: str) -> None:
