@@ -317,9 +317,15 @@ int main(int argc, char* argv[]) {
 
   // Main benchmark loop
   for (int iter = 0; iter < numIters + 1; ++iter) {
-    // Each rank fills its designated chunk. Rank kStragglerRank (rank 3) has
-    // no valid chunk in the buffer (buffer holds numRanks-1 chunks), so skip it.
-    if ((size_t)myRank * chunkSize < size) {
+    if (myRank == kStragglerRank) {
+      // Straggler fills entire buffer — it contributes to every chunk via swap steps
+      fill_pattern<<<(size + kFillThreads - 1) / kFillThreads, kFillThreads, 0, stream>>>(
+          d_buffer, kFillValue, size);
+    } else {
+      // Non-straggler: zero entire buffer, then fill own chunk with kFillValue.
+      // The zeroing prevents stale values from the previous iteration's allreduce
+      // from accumulating in the ReduceScatter.
+      CHECK_CUDA(cudaMemsetAsync(d_buffer, 0, size * sizeof(float), stream));
       fill_pattern<<<(chunkSize + kFillThreads - 1) / kFillThreads, kFillThreads, 0, stream>>>(
           d_buffer + myRank * chunkSize, kFillValue, chunkSize);
     }
