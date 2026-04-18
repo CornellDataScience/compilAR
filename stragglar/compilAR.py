@@ -42,24 +42,51 @@ def constructNCCL(rounds):
         res += "ncclGroupStart(); \n" # each round is grouped by a nccl group start/end
 
         # in here is the logic to do the nccl send recvs
+        stub = ""
         for matching in round:
+
             pass
-            # if straggler matching do something
-            
-            # if one way do something
+            # if one way matching do something
+            if (matching[0] == "oneway"):
+                res +=  f"else if (myRank == {matching[1]}) {{ CHECK_NCCL(ncclSend(d_buffer + {matching[3]} * chunkSize, chunkSize, ncclFloat, {matching[2]}, comm, stream)); }} \n"
+                res +=  f"else if (myRank == {matching[2]}) {{ CHECK_NCCL(ncclRecv(d_buffer + {matching[3]} * chunkSize, chunkSize, ncclFloat, {matching[1]}, comm, stream)); }} \n"
+
+            # if straggler way do something
+            if (matching[0] == "straggler"):
+                res += f"""if (myRank == {matching[1]}) {{
+                    CHECK_NCCL(ncclSend(d_buffer + {matching[3]} * chunkSize,           chunkSize, ncclFloat, {matching[2]}, comm, stream));
+                    CHECK_NCCL(ncclRecv(d_tempbuf,          chunkSize, ncclFloat, {matching[2]}, comm, stream));
+                }} \n"""
+                res += f"""if (myRank == {matching[2]}) {{
+                    CHECK_NCCL(ncclSend(d_buffer  + {matching[3]} * chunkSize,           chunkSize, ncclFloat, {matching[1]}, comm, stream));
+                    CHECK_NCCL(ncclRecv(d_tempbuf,          chunkSize, ncclFloat, {matching[1]}, comm, stream));
+                }} \n"""
+                stub += f"""if (myRank == {matching[1]} || myRank == {matching[2]}) reduce_add<<<nb, kReduceThreads, 0, stream>>>(d_buffer + {matching[3]}*chunkSize, d_tempbuf, chunkSize); \n"""
 
             # if 2 way do something
+            if (matching[0] == "twoway"):
+                res += f"""if (myRank == {matching[1]}) {{
+                    CHECK_NCCL(ncclSend(d_buffer + {matching[3]}*chunkSize, chunkSize, ncclFloat, {matching[2]}, comm, stream));
+                    CHECK_NCCL(ncclRecv(d_buffer + {matching[6]}*chunkSize, chunkSize, ncclFloat, {matching[2]}, comm, stream));
+                }} \n"""
+                res += f"""if (myRank == {matching[2]}) {{
+                    CHECK_NCCL(ncclRecv(d_buffer + {matching[3]}*chunkSize, chunkSize, ncclFloat, {matching[1]}, comm, stream));
+                    CHECK_NCCL(ncclSend(d_buffer + {matching[6]}*chunkSize, chunkSize, ncclFloat, {matching[1]}, comm, stream));
+                }} \n"""
         res += "ncclGroupEnd();\n"
+        res += stub
 
         # now do the reduce add for the straggler matching
+
     return res
 
 
 def main():
-    with open('4gpusched.txt', 'r') as f:
+    with open('schedules/4gpusched.txt', 'r') as f:
         lines = f.readlines()
         res = findMatchings(lines)
-        print(res)
+        ans = constructNCCL(res)
+        print(ans)
 
 if __name__ == "__main__":
     main()
