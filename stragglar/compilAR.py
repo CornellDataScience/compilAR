@@ -11,24 +11,22 @@ def findMatchings(lines):
     rounds = []
     for line in lines:
         matchings = []
-        m = re.search(r'StragglerMatching:\s*(\d+)\s*<->\s*(\d+),\s*chunk_id:\s*(\d+)', line)
-        if m:
+        for m in re.finditer(r'StragglerMatching:\s*(\d+)\s*<->\s*(\d+),\s*chunk_id:\s*(\d+)', line):
             a, b, chunk = map(int, m.groups())
             matchings.append(('straggler', a, b, chunk))
 
-        m = re.search(r'OneWayMatching:\s*(\d+)\s*->\s*(\d+),\s*chunk_id:\s*(\d+)', line)
-        if m:
+        for m in re.finditer(r'OneWayMatching:\s*(\d+)\s*->\s*(\d+),\s*chunk_id:\s*(\d+)', line):
             a, b, chunk = map(int, m.groups())
             matchings.append(('oneway', a, b, chunk))
-        
-        m = re.search(
+
+        for m in re.finditer(
             r'TwoWayMatching:\s*(\d+)\s*->\s*(\d+),\s*chunk_id:\s*(\d+)\s*;\s*(\d+)\s*->\s*(\d+),\s*chunk_id:\s*(\d+)',
             line
-        )
-        if m:
+        ):
             a, b, chunk1, c, d, chunk2 = map(int, m.groups())
             matchings.append(('twoway', a, b, chunk1, c, d, chunk2))
-        if (len(matchings) != 0):
+
+        if matchings:
             rounds.append(matchings)
 
     return rounds
@@ -38,6 +36,10 @@ def findMatchings(lines):
 def constructNCCL(rounds):
     # preamble typa stuff
     res = ""
+
+    # define nb
+    res += "const int nb = (chunkSize + kReduceThreads - 1) / kReduceThreads;\n"
+    
     for round in rounds:
         res += "ncclGroupStart(); \n" # each round is grouped by a nccl group start/end
 
@@ -48,8 +50,8 @@ def constructNCCL(rounds):
             pass
             # if one way matching do something
             if (matching[0] == "oneway"):
-                res +=  f"else if (myRank == {matching[1]}) {{ CHECK_NCCL(ncclSend(d_buffer + {matching[3]} * chunkSize, chunkSize, ncclFloat, {matching[2]}, comm, stream)); }} \n"
-                res +=  f"else if (myRank == {matching[2]}) {{ CHECK_NCCL(ncclRecv(d_buffer + {matching[3]} * chunkSize, chunkSize, ncclFloat, {matching[1]}, comm, stream)); }} \n"
+                res +=  f"if (myRank == {matching[1]}) {{ CHECK_NCCL(ncclSend(d_buffer + {matching[3]} * chunkSize, chunkSize, ncclFloat, {matching[2]}, comm, stream)); }} \n"
+                res +=  f"if (myRank == {matching[2]}) {{ CHECK_NCCL(ncclRecv(d_buffer + {matching[3]} * chunkSize, chunkSize, ncclFloat, {matching[1]}, comm, stream)); }} \n"
 
             # if straggler way do something
             if (matching[0] == "straggler"):
