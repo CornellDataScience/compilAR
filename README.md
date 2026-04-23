@@ -82,15 +82,38 @@ nvidia-smi --query-gpu=compute_cap --format=csv,noheader
 
 ### 4. Run
 
+There are two ways to launch the binary depending on whether you want to detect a real straggler or simulate one.
+
+#### Automated straggler detection (recommended)
+
+`launch.sh` combines the smoketester, the rank-to-GPU mapping, and the `mpirun` invocation in one step:
+
 ```bash
-# No straggler delay (correctness check and baseline throughput)
+./stragglar/launch.sh 8 ./stragglar_8gpu 1073741824 stragglar 10 -1
+```
+
+Under the hood it:
+1. Runs the smoketester on all N GPUs to identify the physically slow one
+2. Builds a rank-to-GPU mapping so MPI rank N-1 binds to that GPU
+3. Exports the mapping and calls `mpirun` with `rank_wrapper.sh`, which sets `LOCAL_RANK` per process
+
+When using `launch.sh`, pass `-1` for `sleep_ms` since the physically slow GPU will lag on its own and no simulated delay is needed.
+
+#### Manual launch (simulated straggler)
+
+For correctness validation or benchmarking without a real straggler:
+
+```bash
+# No straggler delay — purely for correctness checks
 mpirun -n 8 ./stragglar_8gpu 1073741824 stragglar 10 -1
 
-# With 100ms simulated straggler delay on rank N-1
+# With 100ms simulated delay injected on rank N-1
 mpirun -n 8 ./stragglar_8gpu 1073741824 stragglar 10 100.0
 ```
 
-**Arguments:** `<buffer_bytes> <algorithm> <num_iters> <sleep_ms>`
+In this mode, rank N-1 is always the straggler regardless of physical GPU placement, and the delay is injected via `gpu_sleep_kernel`.
+
+**Binary arguments:** `<buffer_bytes> <algorithm> <num_iters> <sleep_ms>`
 
 | Argument | Description |
 |---|---|
@@ -106,16 +129,6 @@ stragglar,1073741824,1,100.000,12.345,82.345
 ```
 
 **Correctness:** every element of every rank's output buffer must equal `6.0f`. Failures print `Rank X, idx Y, val Z`.
-
-### Detecting the real straggler GPU
-
-To identify which physical GPU is the actual straggler before running:
-
-```bash
-python -m stragglar.smoketest.smoketest --gpus 0 1 2 3 4 5 6 7 --iters 15
-```
-
-This runs randomized GEMM workloads on all GPUs concurrently and reports which finishes last and by how much. The straggler GPU index is then used to configure `LOCAL_RANK` so that MPI rank N-1 binds to that physical GPU at launch time.
 
 ## Architecture Notes
 
@@ -133,4 +146,8 @@ Two NCCL communicators are maintained per process:
 
 ### GPU binding
 
-Each MPI process binds to its GPU via the `LOCAL_RANK` environment variable (set by `mpirun`, `torchrun`, or SLURM). Without it, the process falls back to `myRank % cudaDeviceCount`. For accurate straggler behavior, the process assigned rank N-1 must be bound to the physically slow GPU.
+Each MPI process binds to its GPU via the `LOCAL_RANK` environment variable (set by `mpirun`, `torchrun`, or SLURM). Without it, the process falls back to `myRank % cudaDeviceCount`. For accurate straggler behavior, the process assigned rank N-1 must be bound to the physically slow GPU. `launch.sh` handles this automatically by parsing the smoketester's output and constructing the correct mapping.
+
+## Acknowledgements
+
+The StragglAR algorithm and the schedule synthesizer in `stragglar/schedules/` are the work of Devraj et al., [Efficient AllReduce with Stragglers](https://arxiv.org/pdf/2505.23523). This project is not the original algorithm — it is a compiler and launch harness built around their work. The algorithmic contribution (the round-matching formulation, optimality bounds, and synthesis procedure) is theirs; what is new here is the code-generation pipeline, the MPI+NCCL runtime template, and the straggler-aware launch integration.
