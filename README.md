@@ -12,9 +12,9 @@ The core problem it solves is that standard AllReduce algorithms (ring, tree, re
 
 Given N GPUs with one designated straggler (rank N-1):
 
-1. **Reduce-scatter phase (while straggler is delayed):** The N-1 healthy ranks run `ncclReduceScatter` among themselves over N-1 equal chunks of the buffer. After this, rank r holds the partial sum of chunk r across all healthy ranks.
+1. **Reduce-scatter phase:** While the straggler is delayed, the N-1 healthy ranks run `ncclReduceScatter` among themselves over N-1 equal chunks of the buffer. After this, rank r holds the partial sum of chunk r across all healthy ranks.
 
-2. **Straggler merge phase (schedule-driven):** The schedule synthesizer produces a sequence of rounds, each containing a batch of pairwise exchanges. Three exchange types are used:
+2. **Straggler merge phase:** The schedule synthesizer produces a sequence of rounds, each containing a batch of pairwise exchanges. Three exchange types are used:
    - **StragglerMatching**: a healthy rank and the straggler both hold a partial sum of the same chunk. They swap into a scratch buffer, then both call `reduce_add` to finalize. After this, both hold the complete N-rank sum for that chunk.
    - **OneWayMatching**: a rank holding a fully-reduced chunk pushes it to a rank that does not. Plain copy, no reduction.
    - **TwoWayMatching**: two ranks each hold a fully-reduced chunk the other lacks. They swap simultaneously. Plain copy in each direction.
@@ -69,7 +69,7 @@ On success:
 Wrote generated_8gpu.cu (N=8, straggler=7)
 ```
 
-### 3. Build the binary (on the cluster)
+### 3. Build the binary
 
 ```bash
 nvcc -ccbin mpicxx -O3 -arch=sm_89 generated_8gpu.cu -lnccl -lmpi -o stragglar_8gpu
@@ -86,13 +86,11 @@ There are two ways to launch the binary depending on whether you want to detect 
 
 #### Automated straggler detection (recommended)
 
-`launch.sh` combines the smoketester, the rank-to-GPU mapping, and the `mpirun` invocation in one step:
-
 ```bash
 ./stragglar/launch.sh 8 ./stragglar_8gpu 1073741824 stragglar 10 -1
 ```
 
-Under the hood it:
+`launch.sh` does the following:
 1. Runs the smoketester on all N GPUs to identify the physically slow one
 2. Builds a rank-to-GPU mapping so MPI rank N-1 binds to that GPU
 3. Exports the mapping and calls `mpirun` with `rank_wrapper.sh`, which sets `LOCAL_RANK` per process
@@ -111,7 +109,7 @@ mpirun -n 8 ./stragglar_8gpu 1073741824 stragglar 10 -1
 mpirun -n 8 ./stragglar_8gpu 1073741824 stragglar 10 100.0
 ```
 
-In this mode, rank N-1 is always the straggler regardless of physical GPU placement, and the delay is injected via `gpu_sleep_kernel`.
+In this mode, rank N-1 is always the straggler regardless of physical GPU placement, and the delay is simulated via `gpu_sleep_kernel`.
 
 **Binary arguments:** `<buffer_bytes> <algorithm> <num_iters> <sleep_ms>`
 
@@ -130,11 +128,11 @@ stragglar,1073741824,1,100.000,12.345,82.345
 
 **Correctness:** every element of every rank's output buffer must equal `6.0f`. Failures print `Rank X, idx Y, val Z`.
 
-## Architecture Notes
+## Architecture
 
 ### Single-process vs. multi-process model
 
-The files in `reference_code/` and `allreduce_4GPU_rewrite.cu` use a single-process model: one process manages all GPUs via `ncclCommInitAll`. This only works when all GPUs are on one machine and is kept for reference.
+The files in `reference_code/` and `allreduce_4GPU_rewrite.cu` use a single-process model: one process manages all GPUs via `ncclCommInitAll`. This only works when all GPUs are on one host machine and is kept for reference.
 
 `allreduce_multinode.cu` (and all generated files) use a multi-process MPI model: one MPI rank per GPU. Each process initializes its NCCL communicator via `ncclCommInitRank` with a token distributed by `MPI_Bcast`. This scales to multi-node configurations.
 
@@ -150,4 +148,4 @@ Each MPI process binds to its GPU via the `LOCAL_RANK` environment variable (set
 
 ## Acknowledgements
 
-The StragglAR algorithm and the schedule synthesizer in `stragglar/schedules/` are the work of Devraj et al., [Efficient AllReduce with Stragglers](https://arxiv.org/pdf/2505.23523). This project is not the original algorithm — it is a compiler and launch harness built around their work. The algorithmic contribution (the round-matching formulation, optimality bounds, and synthesis procedure) is theirs; what is new here is the code-generation pipeline, the MPI+NCCL runtime template, and the straggler-aware launch integration.
+The StragglAR algorithm and the schedule synthesizer in `stragglar/schedules/` are the work of Devraj et al., [Efficient AllReduce with Stragglers](https://arxiv.org/pdf/2505.23523). This project is not the original algorithm, but rather a compiler and launch harness built around it. The algorithmic contribution (the round-matching formulation, optimality bounds, and synthesis procedure) is theirs; what we've added is the code-generation pipeline, the MPI+NCCL runtime template, and the straggler-aware launch integration.
