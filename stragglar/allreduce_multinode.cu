@@ -184,16 +184,17 @@ void stragglar_allreduce_delay(
     gpu_sleep_kernel<<<1, 1, 0, stream>>>(sleep_cycles);
 
   // Ranks 0-2 sync then reduce-scatter among themselves
-  if (myRank != kStragglerRank) {
-    cudaStreamSynchronize(stream);
-    ncclGroupStart();
-    // subRank == myRank for ranks 0,1,2 because MPI_Comm_split preserves order
-    CHECK_NCCL(ncclReduceScatter(
-        d_buffer, d_buffer + myRank * chunkSize,
-        chunkSize, ncclFloat, ncclSum, subComm, stream));
-    ncclGroupEnd();
-  }
-
+// Ranks 0-2 sync then reduce-scatter among themselves
+if (myRank != kStragglerRank) {
+  cudaStreamSynchronize(stream);
+  ncclGroupStart();
+  // Pass d_buffer twice for true in-place ReduceScatter.
+  // NCCL will automatically place the result for subRank 'i' at offset (i * chunkSize).
+  CHECK_NCCL(ncclReduceScatter(
+      d_buffer, d_buffer, 
+      chunkSize, ncclFloat, ncclSum, subComm, stream));
+  ncclGroupEnd();
+	}
   stragglar_allreduce_helper(d_buffer, d_tempbuf, myRank, stream, comm,
                              stop, chunkSize);
 }
