@@ -92,11 +92,11 @@ void stragglar_allreduce_helper(
   // step 1: ranks 0 and 3 swap chunk 0
   ncclGroupStart();
   if (myRank == 3) {
-    CHECK_NCCL(ncclSend(d_buffer,           chunkSize, ncclFloat, 0, comm, stream));
-    CHECK_NCCL(ncclRecv(d_tempbuf,          chunkSize, ncclFloat, 0, comm, stream));
+    CHECK_NCCL(ncclSend(d_buffer, chunkSize, ncclFloat, 0, comm, stream));
+    CHECK_NCCL(ncclRecv(d_tempbuf, chunkSize, ncclFloat, 0, comm, stream));
   } else if (myRank == 0) {
-    CHECK_NCCL(ncclRecv(d_tempbuf,          chunkSize, ncclFloat, 3, comm, stream));
-    CHECK_NCCL(ncclSend(d_buffer,           chunkSize, ncclFloat, 3, comm, stream));
+    CHECK_NCCL(ncclRecv(d_tempbuf, chunkSize, ncclFloat, 3, comm, stream));
+    CHECK_NCCL(ncclSend(d_buffer, chunkSize, ncclFloat, 3, comm, stream));
   }
   ncclGroupEnd();
 
