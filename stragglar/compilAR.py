@@ -1,5 +1,11 @@
 
-import regex as re
+import os
+import sys
+import re
+
+TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'allreduce_multinode.cu.template')
+MARKERS = ['/*{{NUM_RANKS}}*/', '/*{{STRAGGLER_RANK}}*/', '/*{{HELPER_BODY}}*/']
+
 class StraggleMatching:
     def __init__(self, rank1, rank2):
         self.rank1 = rank1
@@ -82,13 +88,75 @@ def constructNCCL(rounds):
 
     return res
 
+# infer number of ranks N from the schedule
+def infer_n(rounds) -> int:
+    max_rank = 0
+    for round in rounds:
+        for matching in round:
+            if matching[0] == 'twoway':
+                for i in [1, 2, 4, 5]:
+                    max_rank = max(max_rank, matching[i])
+            else:
+                for i in [1, 2]:
+                    max_rank = max(max_rank, matching[i])
+    return max_rank + 1
+
+# infer straggler rank: the rank that appears in every StragglerMatching
+def infer_straggler(rounds) -> int:
+    straggler_set = None
+    for round in rounds:
+        per_round = set()
+        for matching in round:
+            if matching[0] == 'straggler':
+                per_round.add(matching[1])
+                per_round.add(matching[2])
+        if not per_round:
+            continue  # skip rounds with no straggler matching (otherwise intersection wipes everything)
+        if straggler_set is None:
+            straggler_set = per_round
+        else:
+            straggler_set &= per_round
+    if straggler_set is None or len(straggler_set) != 1:
+        raise ValueError(f"Could not uniquely identify straggler rank; got candidates: {straggler_set}")
+    return next(iter(straggler_set))
 
 def main():
-    with open('schedules/4gpusched.txt', 'r') as f:
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} <schedule_file> <output.cu>", file=sys.stderr)
+        sys.exit(1)
+
+    schedule_path = sys.argv[1]
+    output_path = sys.argv[2]
+
+    with open(schedule_path, 'r') as f:
         lines = f.readlines()
-        res = findMatchings(lines)
-        ans = constructNCCL(res)
-        print(ans)
+
+    rounds = findMatchings(lines)
+    if not rounds:
+        raise ValueError(f"No rounds parsed from {schedule_path}")
+
+    n = infer_n(rounds)
+    straggler = infer_straggler(rounds)
+    assert straggler == n - 1, f"Expected straggler to be rank N-1 = {n-1}; got {straggler}"
+
+    body = constructNCCL(rounds)
+
+    with open(TEMPLATE_PATH, 'r') as f:
+        template = f.read()
+
+    for marker in MARKERS:
+        if marker not in template:
+            raise ValueError(f"Template missing marker: {marker}")
+
+    out = (template
+           .replace('/*{{NUM_RANKS}}*/', str(n))
+           .replace('/*{{STRAGGLER_RANK}}*/', str(straggler))
+           .replace('/*{{HELPER_BODY}}*/', body))
+
+    with open(output_path, 'w') as f:
+        f.write(out)
+
+    print(f"Wrote {output_path} (N={n}, straggler={straggler})", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
