@@ -71,14 +71,30 @@ Wrote generated_8gpu.cu (N=8, straggler=7)
 
 ### 3. Build the binary (on the cluster)
 
+The exact `nvcc` invocation depends on your GPU hardware and where NCCL is installed. The simplest case, for an example homogeneous cluster with system-installed NCCL:
+
 ```bash
-nvcc -ccbin mpicxx -O3 -arch=sm_89 generated_8gpu.cu -lnccl -lmpi -o stragglar_8gpu
+nvcc -ccbin mpicxx -O3 -arch=sm_61 generated_8gpu.cu -lnccl -lmpi -o stragglar_8gpu
 ```
 
-Replace `sm_89` with your GPU's compute capability:
-```bash
-nvidia-smi --query-gpu=compute_cap --format=csv,noheader
-```
+**Adjustments for other environments:**
+
+- **Different GPU model**: replace `sm_61` with the compute capability of your card. Check with:
+  ```bash
+  nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+  ```
+- **Mixed-GPU cluster**: compile for all target archs plus a PTX fallback:
+  ```bash
+  nvcc ... -gencode arch=compute_70,code=sm_70 \
+           -gencode arch=compute_75,code=sm_75 \
+           -gencode arch=compute_75,code=compute_75 \
+           ...
+  ```
+- **NCCL installed via conda** (not in system lib paths): add include and library search paths:
+  ```bash
+  nvcc ... -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lnccl -ccbin=mpicxx ...
+  ```
+- **`module load` clusters**: typically `module load cuda/12.x nccl openmpi` before nvcc picks up the headers and libs.
 
 ### 4. Run
 
@@ -147,6 +163,20 @@ Two NCCL communicators are maintained per process:
 ### GPU binding
 
 Each MPI process binds to its GPU via the `LOCAL_RANK` environment variable (set by `mpirun`, `torchrun`, or SLURM). Without it, the process falls back to `myRank % cudaDeviceCount`. For accurate straggler behavior, the process assigned rank N-1 must be bound to the physically slow GPU. `launch.sh` handles this automatically by parsing the smoketester's output and constructing the correct mapping.
+
+## Portability and Known Assumptions
+
+Beyond the build-time flags covered in the usage section, the runtime code and launch harness make a few assumptions worth flagging before you run on a new cluster:
+
+- **`launch.sh` assumes all N GPUs are on one node.** The smoketester is a single Python process that enumerates visible GPUs via `torch.cuda.device_count()`, so it can only rank GPUs on the node it runs on. For multi-node runs you need to either (a) extend the smoketester to aggregate timings from a per-node launcher, or (b) fall back to manual `LOCAL_RANK` assignment with a known straggler GPU.
+- **Open MPI is assumed by `launch.sh`.** The `-x RANK_TO_GPU` flag on the final `mpirun` line is Open MPI syntax. For MPICH, replace with `-env RANK_TO_GPU "$RANK_TO_GPU"` or `-envall`. `rank_wrapper.sh` already handles rank detection across Open MPI / MPICH / SLURM.
+- **Data type is hardcoded to `float32`.** `constructNCCL` emits `ncclFloat` calls and the template allocates `float*` buffers. To support fp16 / bf16, both the template (`ncclHalf` / `ncclBfloat16`, `__half*` / `__nv_bfloat16*`) and the generator would need to accept a dtype parameter.
+- **Buffer size must be divisible by `(N-1) * sizeof(float)`.** The template computes `chunkSize = size / (numRanks - 1)` without checking the remainder. Passing an odd buffer size silently truncates. Stick to powers of 2 in bytes for predictable behavior.
+- **Straggler is always rank N-1.** This is baked into the generated code. `launch.sh` maps the physical straggler GPU to rank N-1 at launch time, but if you need the straggler to be a different logical rank (e.g., for testing), you'd need to regenerate the schedule.
+- **Correctness check assumes the built-in fill pattern.** The `kExpectedSum = 6.0f` verification only holds when the straggler fills its whole buffer with `3.0f` and each non-straggler fills only its own chunk. If you wire up real input data, remove or replace that check at the bottom of `main()` in the template.
+- **Clock-based straggler delay is calibrated to device 0.** `calculate_sleep_cycles` queries `cudaDevAttrClockRate` on device 0, so on clusters with heterogeneous GPU clocks the simulated delay will not match wall-clock ms on other devices. Doesn't affect correctness, just the meaning of `sleep_ms`.
+
+If your setup violates any of these, the code will mostly still run — it just won't do what you expect. The build-time footguns (wrong `-arch`, missing NCCL paths) fail loudly with nvcc errors; the runtime ones (dtype, fill pattern) fail silently.
 
 ## Acknowledgements
 
