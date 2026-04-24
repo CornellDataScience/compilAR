@@ -106,6 +106,9 @@ def main():
     # Step 3: log results
     print_results(result, hostname)
 
+    # Machine-parseable line for launch.sh to grep (unambiguous vs. exit code).
+    print(f"STRAGGLER_GPU={result.straggler_gpu}")
+
     return result.straggler_gpu
 
 

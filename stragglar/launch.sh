@@ -27,13 +27,20 @@ GPU_LIST="$(seq 0 $((N - 1)))"
 
 echo "[launch] Running smoketester on $N GPUs..." >&2
 
-set +e
-python -m stragglar.smoketest.smoketest --gpus $GPU_LIST --iters 15
-STRAGGLER_GPU=$?
-set -e
+# Tee smoketester output so the user still sees the verdict table on stderr,
+# while we capture stdout for machine parsing. A Python failure (traceback)
+# won't contain the STRAGGLER_GPU= line, which is how we detect the error.
+SMOKE_OUT=$(python -m stragglar.smoketest.smoketest --gpus $GPU_LIST --iters 15 | tee /dev/stderr) || true
+
+STRAGGLER_GPU=$(echo "$SMOKE_OUT" | grep -E '^STRAGGLER_GPU=[0-9]+$' | tail -1 | cut -d= -f2)
+
+if [ -z "$STRAGGLER_GPU" ]; then
+    echo "[launch] Error: smoketester did not produce a STRAGGLER_GPU= line (did it crash?)" >&2
+    exit 1
+fi
 
 if [ "$STRAGGLER_GPU" -ge "$N" ] || [ "$STRAGGLER_GPU" -lt 0 ]; then
-    echo "[launch] Error: smoketest returned invalid GPU id: $STRAGGLER_GPU" >&2
+    echo "[launch] Error: smoketester returned invalid GPU id: $STRAGGLER_GPU" >&2
     exit 1
 fi
 
