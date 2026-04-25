@@ -1,33 +1,87 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/pytorch:24.10-py3
+From: nvcr.io/nvidia/pytorch:23.10-py3
 
 %labels
     Project    compilAR (Cornell Data Science)
     Purpose    Build/run environment for the StragglAR allreduce compiler
-    BaseImage  nvcr.io/nvidia/pytorch:24.10-py3
+    BaseImage  nvcr.io/nvidia/pytorch:23.10-py3
+    CUDA       12.2 (compatible with host driver >= 535)
+    SMTargets  61,70,75,80,86,89,90 + PTX for compute_90
 
 %help
     Toolchain image for the StragglAR project.
-    Provides CUDA, nvcc, NCCL, OpenMPI, UCX, Python 3, PyTorch, and numpy.
+    Provides CUDA 12.2, nvcc, NCCL, OpenMPI 4.1.x, UCX (IB-capable),
+    Python 3, PyTorch, and numpy.
 
     The project source is NOT baked in. Apptainer auto-bind-mounts the host
     CWD into the container at the same path, so source edits are visible
     immediately without a rebuild.
 
-    Typical usage, run from the repo root:
-        apptainer exec --nv compilAR.sif python3 stragglar/compilAR.py <schedule.txt> <out.cu>
-        apptainer exec --nv compilAR.sif nvcc -ccbin mpicxx -arch=sm_XX <out.cu> -lnccl -lmpi -o <bin>
-        apptainer exec --nv compilAR.sif ./stragglar/launch.sh <N> <bin> <args...>
+    Build a fat binary that runs on any GPU from Pascal through Hopper
+    (Blackwell sm_100 falls back to PTX JIT):
+        apptainer exec --nv compilAR.sif stragglar-build <out.cu> <bin>
 
-    Replace sm_XX with the compute capability of your target GPU
-    (nvidia-smi --query-gpu=compute_cap --format=csv,noheader).
+    Single-GPU compute-cap-only build (faster compile, host GPU only):
+        apptainer exec --nv compilAR.sif stragglar-build --native <out.cu> <bin>
+
+    Launch on a TCP cluster (e.g. orca), from the head node:
+        mpirun -np N -H host1:k,host2:k --mca btl_tcp_if_include <iface> \
+            -x NCCL_DEBUG=INFO \
+            apptainer exec --nv /path/to/compilAR.sif <bin> <args...>
+
+    Launch on a Slurm cluster with IB (e.g. Unicorn), from an sbatch script:
+        srun --mpi=pmix apptainer exec --nv \
+            --bind /dev/infiniband --bind /sys/class/infiniband \
+            /path/to/compilAR.sif <bin> <args...>
+
+    NCCL auto-detects IB if the host devices are bind-mounted; otherwise
+    falls back to TCP. No image rebuild needed between clusters.
+
+%post
+    set -e
+
+    # PMIx runtime so `srun --mpi=pmix` works on Slurm sites (no-op on orca).
+    apt-get update
+    apt-get install -y --no-install-recommends libpmix-dev libpmix2
+    rm -rf /var/lib/apt/lists/*
+
+    # Fat-build helper. One binary that runs on every shipping NVIDIA GPU
+    # from Pascal (sm_61) through Hopper (sm_90), with PTX for compute_90 so
+    # newer GPUs (e.g. Blackwell) JIT from PTX on first launch.
+    cat > /usr/local/bin/stragglar-build <<'EOF'
+#!/bin/bash
+set -e
+NATIVE=0
+if [ "$1" = "--native" ]; then NATIVE=1; shift; fi
+if [ $# -ne 2 ]; then
+    echo "usage: stragglar-build [--native] <input.cu> <output_binary>" >&2
+    exit 1
+fi
+SRC="$1"
+OUT="$2"
+if [ "$NATIVE" -eq 1 ]; then
+    GENCODE="-arch=native"
+else
+    GENCODE="\
+        -gencode arch=compute_61,code=sm_61 \
+        -gencode arch=compute_70,code=sm_70 \
+        -gencode arch=compute_75,code=sm_75 \
+        -gencode arch=compute_80,code=sm_80 \
+        -gencode arch=compute_86,code=sm_86 \
+        -gencode arch=compute_89,code=sm_89 \
+        -gencode arch=compute_90,code=sm_90 \
+        -gencode arch=compute_90,code=compute_90"
+fi
+exec nvcc -ccbin mpicxx -O3 -std=c++17 $GENCODE "$SRC" -lnccl -lmpi -o "$OUT"
+EOF
+    chmod +x /usr/local/bin/stragglar-build
 
 %test
-    # Aborts the build if any of these fail. Catches "image built but broken".
     set -e
     nvcc --version
     mpirun --version | head -1
     python3 -c "import torch, numpy; print(f'torch={torch.__version__}  numpy={numpy.__version__}')"
+    test -x /usr/local/bin/stragglar-build
 
 %runscript
     exec "$@"
