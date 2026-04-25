@@ -106,6 +106,16 @@ def main():
     # Step 3: log results
     print_results(result, hostname)
 
+    # Machine-parseable single line for downstream parsing. Single-line because
+    # mpirun may interleave output from multiple per-node smoketester processes,
+    # and each process's stdout is line-buffered — splitting fields across lines
+    # is racy.
+    delta_ms = result.delta_to_second * 1000
+    print(
+        f"STRAGGLER_REPORT={socket.gethostname()}:{result.straggler_gpu}:{delta_ms:.3f}",
+        flush=True,
+    )
+
     return result.straggler_gpu
 
 

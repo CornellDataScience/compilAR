@@ -1,17 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
-# Per-rank launcher invoked by mpirun
+# rank_wrapper.sh — per-rank launcher invoked by mpirun.
 #
-# Reads this process's MPI rank from the environment, looks up its assigned
-# GPU in $RANK_TO_GPU (set by launch.sh), exports LOCAL_RANK, then execs the
-# real binary with all passed args
+# Reads $RANK_TO_GPU (set by launch.sh) which encodes a per-node mapping:
+#     "host1:0,1,2,3|host2:0,1,3,2"
+# Looks up the entry matching this rank's hostname, indexes the CSV by the
+# local MPI rank to get the GPU id, exports LOCAL_RANK, and execs the binary.
 
-# Detect the MPI rank. Try Open MPI first, then MPICH, then SLURM.
-MY_RANK="${OMPI_COMM_WORLD_RANK:-${PMI_RANK:-${SLURM_PROCID:-}}}"
+MY_HOSTNAME="$(hostname -s)"
+MY_LOCAL_RANK="${OMPI_COMM_WORLD_LOCAL_RANK:-${PMI_LOCAL_RANK:-${SLURM_LOCALID:-}}}"
 
-if [ -z "$MY_RANK" ]; then
-    echo "rank_wrapper: could not determine MPI rank from environment" >&2
+if [ -z "$MY_LOCAL_RANK" ]; then
+    echo "rank_wrapper: could not determine local MPI rank from environment" >&2
     exit 1
 fi
 
@@ -20,8 +21,31 @@ if [ -z "${RANK_TO_GPU:-}" ]; then
     exit 1
 fi
 
-# Split space-separated list into a bash array and index by rank
-MAPPING=($RANK_TO_GPU)
-export LOCAL_RANK="${MAPPING[$MY_RANK]}"
+# Find the entry for our hostname in the pipe-separated mapping
+NODEMAP=""
+IFS='|' read -ra ENTRIES <<< "$RANK_TO_GPU"
+for entry in "${ENTRIES[@]}"; do
+    host="${entry%%:*}"
+    if [ "$host" = "$MY_HOSTNAME" ]; then
+        NODEMAP="${entry#*:}"
+        break
+    fi
+done
+
+if [ -z "$NODEMAP" ]; then
+    echo "rank_wrapper: no mapping entry for hostname '$MY_HOSTNAME' in RANK_TO_GPU" >&2
+    echo "  RANK_TO_GPU=$RANK_TO_GPU" >&2
+    exit 1
+fi
+
+# Split the per-node CSV and index by local rank
+IFS=',' read -ra MAPPING <<< "$NODEMAP"
+
+if [ "$MY_LOCAL_RANK" -ge "${#MAPPING[@]}" ]; then
+    echo "rank_wrapper: local rank $MY_LOCAL_RANK out of bounds for node mapping (${#MAPPING[@]} entries)" >&2
+    exit 1
+fi
+
+export LOCAL_RANK="${MAPPING[$MY_LOCAL_RANK]}"
 
 exec "$@"
