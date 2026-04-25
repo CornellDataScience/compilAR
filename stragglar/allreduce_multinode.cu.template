@@ -166,6 +166,12 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
+  if (size % (totalRanks - 1) != 0) {
+    if (myRank == 0) fprintf(stderr, "buffer size %zu floats not divisible by N-1=%d\n",
+                              size, totalRanks - 1);
+    MPI_Finalize(); return EXIT_FAILURE;
+}
+
   size_t bytes   = (size_t)strtoull(argv[1], NULL, 10);
   size_t size    = bytes / sizeof(float);
   const char* alg = argv[2];
