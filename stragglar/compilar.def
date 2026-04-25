@@ -1,0 +1,33 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:24.10-py3
+
+%labels
+    Project    compilAR (Cornell Data Science)
+    Purpose    Build/run environment for the StragglAR allreduce compiler
+    BaseImage  nvcr.io/nvidia/pytorch:24.10-py3
+
+%help
+    Toolchain image for the StragglAR project.
+    Provides CUDA, nvcc, NCCL, OpenMPI, UCX, Python 3, PyTorch, and numpy.
+
+    The project source is NOT baked in. Apptainer auto-bind-mounts the host
+    CWD into the container at the same path, so source edits are visible
+    immediately without a rebuild.
+
+    Typical usage, run from the repo root:
+        apptainer exec --nv compilAR.sif python3 stragglar/compilAR.py <schedule.txt> <out.cu>
+        apptainer exec --nv compilAR.sif nvcc -ccbin mpicxx -arch=sm_XX <out.cu> -lnccl -lmpi -o <bin>
+        apptainer exec --nv compilAR.sif ./stragglar/launch.sh <N> <bin> <args...>
+
+    Replace sm_XX with the compute capability of your target GPU
+    (nvidia-smi --query-gpu=compute_cap --format=csv,noheader).
+
+%test
+    # Aborts the build if any of these fail. Catches "image built but broken".
+    set -e
+    nvcc --version
+    mpirun --version | head -1
+    python3 -c "import torch, numpy; print(f'torch={torch.__version__}  numpy={numpy.__version__}')"
+
+%runscript
+    exec "$@"
