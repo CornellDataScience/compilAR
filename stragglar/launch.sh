@@ -29,6 +29,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WRAPPER="$SCRIPT_DIR/rank_wrapper.sh"
 PICKER="$SCRIPT_DIR/smoketest/pick_global_straggler.py"
 
+# Pick whatever python interpreter is available (some envs only ship python3)
+PY="$(command -v python3 || command -v python || true)"
+if [ -z "$PY" ]; then
+    echo "Error: neither python3 nor python found in PATH" >&2
+    exit 1
+fi
+
 if [ ! -x "$WRAPPER" ]; then
     echo "Error: $WRAPPER not found or not executable" >&2
     echo "Run: chmod +x $WRAPPER" >&2
@@ -78,7 +85,7 @@ SMOKE_OUT=$(
     mpirun -n "$NUM_NODES" \
         --hostfile "$HOSTFILE_TEMP" \
         --map-by ppr:1:node \
-        python -m stragglar.smoketest.smoketest --iters 15 \
+        "$PY" -m stragglar.smoketest.smoketest --iters 15 \
         | tee /dev/stderr
 ) || {
     echo "[launch] Error: smoketester invocation failed" >&2
@@ -86,7 +93,7 @@ SMOKE_OUT=$(
 }
 
 # --- Step 3: pick the global straggler --------------------------------------
-PICK_OUT=$(echo "$SMOKE_OUT" | python "$PICKER") || {
+PICK_OUT=$(echo "$SMOKE_OUT" | "$PY" "$PICKER") || {
     echo "[launch] Error: pick_global_straggler failed" >&2
     exit 1
 }
