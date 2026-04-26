@@ -29,11 +29,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WRAPPER="$SCRIPT_DIR/rank_wrapper.sh"
 PICKER="$SCRIPT_DIR/smoketest/pick_global_straggler.py"
 
-# Pick whatever python interpreter is available (some envs only ship python3)
-PY="$(command -v python3 || command -v python || true)"
-if [ -z "$PY" ]; then
-    echo "Error: neither python3 nor python found in PATH" >&2
-    exit 1
+# Optional containerized execution. If $STRAGGLAR_SIF is set, the smoketester
+# and the final binary are launched via `apptainer exec --nv` on each node, so
+# remote ranks pick up the container's CUDA / NCCL / MPI / PyTorch instead of
+# the host's. $STRAGGLAR_APPTAINER_FLAGS lets you add binds (e.g. IB devices).
+SIF="${STRAGGLAR_SIF:-}"
+APPTAINER_FLAGS="${STRAGGLAR_APPTAINER_FLAGS:-}"
+
+if [ -n "$SIF" ]; then
+    # We only check the SIF file (must be visible on a shared FS). 'apptainer'
+    # itself only needs to exist on the *compute* nodes, not on the host
+    # running launch.sh — the Pi head on orca is aarch64 and has no apptainer.
+    if [ ! -f "$SIF" ]; then
+        echo "Error: STRAGGLAR_SIF=$SIF does not exist" >&2
+        exit 1
+    fi
+    SMOKE_CMD=(apptainer exec --nv $APPTAINER_FLAGS "$SIF" python3 -m stragglar.smoketest.smoketest --iters 15)
+    BIN_PREFIX=(apptainer exec --nv $APPTAINER_FLAGS "$SIF")
+    # Reconcile host PMIx with the container's PMIx when the host OpenMPI
+    # version differs from the container's. Harmless if they already match.
+    MPIRUN_EXTRA=(-x PMIX_MCA_psec=native -x PMIX_MCA_gds=hash)
+    echo "[launch] Containerized mode: $SIF" >&2
+else
+    PY="$(command -v python3 || command -v python || true)"
+    if [ -z "$PY" ]; then
+        echo "Error: neither python3 nor python found in PATH (and STRAGGLAR_SIF unset)" >&2
+        exit 1
+    fi
+    SMOKE_CMD=("$PY" -m stragglar.smoketest.smoketest --iters 15)
+    BIN_PREFIX=()
+    MPIRUN_EXTRA=()
 fi
 
 if [ ! -x "$WRAPPER" ]; then
@@ -85,7 +110,8 @@ SMOKE_OUT=$(
     mpirun -n "$NUM_NODES" \
         --hostfile "$HOSTFILE_TEMP" \
         --map-by ppr:1:node \
-        "$PY" -m stragglar.smoketest.smoketest --iters 15 \
+        "${MPIRUN_EXTRA[@]}" \
+        "${SMOKE_CMD[@]}" \
         | tee /dev/stderr
 ) || {
     echo "[launch] Error: smoketester invocation failed" >&2
@@ -93,7 +119,13 @@ SMOKE_OUT=$(
 }
 
 # --- Step 3: pick the global straggler --------------------------------------
-PICK_OUT=$(echo "$SMOKE_OUT" | "$PY" "$PICKER") || {
+# pick_global_straggler.py only depends on the stdlib, so run it on the host.
+PICKER_PY="$(command -v python3 || command -v python || true)"
+if [ -z "$PICKER_PY" ]; then
+    echo "[launch] Error: no python found on host for picker" >&2
+    exit 1
+fi
+PICK_OUT=$(echo "$SMOKE_OUT" | "$PICKER_PY" "$PICKER") || {
     echo "[launch] Error: pick_global_straggler failed" >&2
     exit 1
 }
@@ -154,8 +186,13 @@ echo "[launch] Mapping: $RANK_TO_GPU" >&2
 export RANK_TO_GPU
 
 # --- Step 6: launch ----------------------------------------------------------
+# In containerized mode, BIN_PREFIX = (apptainer exec --nv ... $SIF) so the
+# binary executes inside the container on each rank's host. rank_wrapper.sh
+# computes LOCAL_RANK on the host and exports it; apptainer passes env vars
+# through by default, so the binary inside the container picks it up.
 exec mpirun -n "$N" \
     --hostfile "$HOSTFILE_TEMP" \
     --map-by slot \
     -x RANK_TO_GPU \
-    "$WRAPPER" "$BINARY" "$@"
+    "${MPIRUN_EXTRA[@]}" \
+    "$WRAPPER" "${BIN_PREFIX[@]}" "$BINARY" "$@"
