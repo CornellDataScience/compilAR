@@ -4,7 +4,7 @@ set -euo pipefail
 # launch.sh — Orchestrator for a StragglAR run (single- or multi-node).
 #
 # Usage: ./launch.sh <N> <binary> [binary_args...]
-#   e.g.: ./launch.sh 4 ./stragglar_4gpu 1073741824 stragglar 10 -1
+#   e.g.: ./launch.sh 4 ./stragglar_4gpu 50331648 stragglar 10 -1
 #
 # Pipeline:
 #   1. Determine the participating nodes (from SLURM env, $HOSTFILE, or localhost)
@@ -17,7 +17,7 @@ set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
     echo "Usage: $0 <N> <binary> [binary_args...]" >&2
-    echo "  e.g.: $0 4 ./stragglar_4gpu 1073741824 stragglar 10 -1" >&2
+    echo "  e.g.: $0 4 ./stragglar_4gpu 50331648 stragglar 10 -1" >&2
     exit 1
 fi
 
