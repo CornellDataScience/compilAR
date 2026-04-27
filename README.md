@@ -93,7 +93,7 @@ mpirun -np 8 -H host1:4,host2:4 \
     -x NCCL_P2P_DISABLE=1 \
     -x PMIX_MCA_psec=native \
     -x PMIX_MCA_gds=hash \
-    apptainer exec --nv compilAR.sif ./stragglar_8gpu 1073741824 stragglar 10 100.0
+    apptainer exec --nv compilAR.sif ./stragglar_8gpu 117440512 stragglar 10 100.0
 ```
 
 The `PMIX_MCA_*` flags reconcile the host PMIx with the container's PMIx; drop them if your host and container OpenMPI versions match. `NCCL_P2P_DISABLE=1` is needed only on consumer (GeForce) GPUs where PCIe P2P is disabled in the driver.
@@ -110,7 +110,7 @@ The `PMIX_MCA_*` flags reconcile the host PMIx with the container's PMIx; drop t
 srun --mpi=pmix \
     apptainer exec --nv \
         --bind /dev/infiniband --bind /sys/class/infiniband \
-        compilAR.sif ./stragglar_8gpu 1073741824 stragglar 10 100.0
+        compilAR.sif ./stragglar_8gpu 117440512 stragglar 10 100.0
 ```
 
 Add `-x NCCL_DEBUG=INFO` (TCP) or `--export=ALL,NCCL_DEBUG=INFO` (Slurm) on first run to confirm `Using network IB` (or `Using network Socket` on TCP) and reasonable bandwidth.
@@ -120,7 +120,7 @@ Add `-x NCCL_DEBUG=INFO` (TCP) or `--export=ALL,NCCL_DEBUG=INFO` (Slurm) on firs
 `launch.sh` runs a smoketester to identify the physically slow GPU and binds it to rank N-1, useful when you don't want to simulate a delay. It currently assumes a single-node, host-toolchain layout — if you use it, run it inside the container:
 
 ```bash
-apptainer exec --nv compilAR.sif ./stragglar/launch.sh 8 ./stragglar_8gpu 1073741824 stragglar 10 -1
+apptainer exec --nv compilAR.sif ./stragglar/launch.sh 8 ./stragglar_8gpu 117440512 stragglar 10 -1
 ```
 
 #### Binary arguments
@@ -129,7 +129,7 @@ apptainer exec --nv compilAR.sif ./stragglar/launch.sh 8 ./stragglar_8gpu 107374
 
 | Argument | Description |
 |---|---|
-| `buffer_bytes` | Total AllReduce buffer size in bytes (e.g. `1073741824` = 1 GiB) |
+| `buffer_bytes` | Total AllReduce buffer size in bytes. Must satisfy `(buffer_bytes / sizeof(float)) % (N - 1) == 0`; the binary errors out otherwise with suggested valid sizes. The examples above use `117440512` (112 MiB, valid for N=8) and `50331648` (48 MiB, valid for N=4) — both pick a 4 MiB chunk per rank |
 | `algorithm` | Must be `stragglar` |
 | `num_iters` | Timed iterations; first is discarded as warmup |
 | `sleep_ms` | Milliseconds to delay rank N-1. `-1` skips reduce-scatter and runs the merge schedule only |
@@ -157,7 +157,7 @@ Each MPI process binds to its GPU via `LOCAL_RANK` (set by `mpirun`, `torchrun`,
 
 - **`launch.sh` assumes single-node.** The smoketester enumerates GPUs via `torch.cuda.device_count()` on one host. Multi-node runs need either a per-node aggregation step or manual `LOCAL_RANK` assignment.
 - **Data type is hardcoded to `float32`.** Supporting fp16 / bf16 requires changes to both the template and the generator.
-- **Buffer size must be divisible by `(N-1) * sizeof(float)`.** No remainder check; odd sizes silently truncate. Stick to powers of 2 in bytes.
+- **Buffer size must be divisible by `(N-1) * sizeof(float)`.** The binary checks at startup and exits with an error and suggested valid sizes if not. Note that round-power-of-2 sizes (1 MiB, 1 GiB) are *not* valid for non-power-of-2 values of N-1 — for N=4 use multiples of 12 bytes (e.g. 48 MiB, 192 MiB), for N=8 use multiples of 28 bytes (e.g. 112 MiB, 896 MiB). The helper at `stragglar/smoketest/pad_buffers.py N` prints a list of valid sizes for a given N.
 - **Straggler is always rank N-1.** Baked into the generated code; `launch.sh` maps the physical straggler GPU to that rank at launch.
 - **Correctness check assumes the built-in fill pattern.** `kExpectedSum = 6.0f` only holds when the straggler fills its buffer with the arbitrary `3.0f` and each non-straggler fills its own chunk. Replace this check when wiring real input data.
 - **Clock-based straggler delay is calibrated to device 0.** On heterogeneous-clock GPUs, `sleep_ms` won't match wall-clock ms on other devices. Doesn't affect correctness.

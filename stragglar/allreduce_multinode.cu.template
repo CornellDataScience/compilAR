@@ -166,17 +166,28 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
-  if (size % (totalRanks - 1) != 0) {
-    if (myRank == 0) fprintf(stderr, "buffer size %zu floats not divisible by N-1=%d\n",
-                              size, totalRanks - 1);
-    MPI_Finalize(); return EXIT_FAILURE;
-}
-
   size_t bytes   = (size_t)strtoull(argv[1], NULL, 10);
   size_t size    = bytes / sizeof(float);
   const char* alg = argv[2];
   int numIters   = atoi(argv[3]);
   float sleepTime = atof(argv[4]);
+
+  if (size % (totalRanks - 1) != 0) {
+    if (myRank == 0) {
+      size_t chunkBytes = (size_t)(totalRanks - 1) * sizeof(float);
+      fprintf(stderr,
+        "buffer size %zu bytes / sizeof(float) = %zu floats not divisible by N-1=%d.\n"
+        "Pick a buffer size that is a multiple of %zu bytes "
+        "(e.g. %zu, %zu, %zu).\n",
+        bytes, size, totalRanks - 1,
+        chunkBytes,
+        bytes - (bytes % chunkBytes),                  // round down
+        bytes + chunkBytes - (bytes % chunkBytes),     // round up
+        (bytes + chunkBytes - (bytes % chunkBytes)) * 2);
+    }
+    MPI_Finalize();
+    return EXIT_FAILURE;
+  }
 
   if (strcmp(alg, "stragglar") != 0) {
     if (myRank == 0) fprintf(stderr, "Invalid algorithm: %s\n", alg);
