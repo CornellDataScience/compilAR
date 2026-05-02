@@ -9,7 +9,8 @@
 #include <stdlib.h>
 #include <cuda_runtime.h>
 #include <nccl.h>
-#include <mpi.h>
+#include <mpi.h>    // MPI is the out-of-band channel for bootstrapping NCCL: no shared memory across hosts,
+                    // so we use MPI_Bcast to distribute ncclUniqueId rendezvous tokens before NCCL init.
 #include <cstring>
 
 #define NUM_RANKS 4
@@ -22,6 +23,8 @@ constexpr float kFillValue    = 3.0f;
 constexpr double kBytesPerGiB = 1024.0 * 1024.0 * 1024.0;
 
 // Error checking
+// MPI_Abort instead of exit(): in a multi-process job, exit() only kills the local process;
+// MPI_Abort tears down the entire job across all nodes.
 #define CHECK_CUDA(cmd) do { \
   cudaError_t e = (cmd); \
   if (e != cudaSuccess) { \
@@ -76,7 +79,11 @@ clock_t calculate_sleep_cycles(float ms) {
 // ---------------------------------------------------------------------------
 // Per-rank send/recv mapping for the custom StragglAR AllReduce
 //
-// Each process issues only its own rank's ops;
+// Signature change from 4GPU version: arrays (float** d_buffers, int* devs, ncclComm_t* comms)
+// become scalars — each process owns exactly one GPU, one stream, one comm handle.
+// No cudaSetDevice calls needed inside this function; device is fixed at process startup.
+//
+// Each process issues only its own rank's send/recv ops (guarded by if(myRank==X)).
 // NCCL matches sends to recvs across the network automatically.
 // ---------------------------------------------------------------------------
 
@@ -175,7 +182,9 @@ void stragglar_allreduce_delay(
 {
   int chunkSize = (int)(size / (numRanks - 1));
 
-  // Barrier so that all ranks start the clock at the same wall-clock moment
+  // MPI_Barrier pins all processes to the same wall-clock moment before recording start.
+  // Without this, rank 0 could record 'start' before other nodes have finished setup,
+  // making elapsed time meaningless. Not needed in 4GPU version (single process, no skew).
   MPI_Barrier(MPI_COMM_WORLD);
   if (myRank == 0) cudaEventRecord(start, 0);
 
@@ -246,7 +255,10 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
-  // Bind each process to its local GPU
+  // Bind each process to its local GPU — done once here, never changed again.
+  // LOCAL_RANK is set by mpirun/SLURM to the per-node GPU index (0,1,2... within a node).
+  // Fallback: myRank % nLocalGPUs handles single-node runs without LOCAL_RANK set.
+  // In the 4GPU version this was a loop + cudaSetDevice on every operation; here it's one call.
   int localGpu = 0;
   const char* lr = getenv("LOCAL_RANK");
   if (lr) {
@@ -258,7 +270,11 @@ int main(int argc, char* argv[]) {
   }
   CHECK_CUDA(cudaSetDevice(localGpu));
 
-  // Bootstrap full NCCL communicator (all ranks)
+  // Bootstrap full NCCL communicator (all ranks).
+  // Pattern replaces ncclCommInitAll (single-process only):
+  //   1. Rank 0 generates a unique rendezvous token (ncclGetUniqueId)
+  //   2. MPI_Bcast distributes it to all ranks over the MPI network (the out-of-band channel)
+  //   3. Each rank independently calls ncclCommInitRank with the shared token to handshake
   ncclUniqueId commId;
   if (myRank == 0) CHECK_NCCL(ncclGetUniqueId(&commId));
   CHECK_MPI(MPI_Bcast(&commId, sizeof(commId), MPI_BYTE, 0, MPI_COMM_WORLD));
@@ -266,9 +282,12 @@ int main(int argc, char* argv[]) {
   ncclComm_t comm;
   CHECK_NCCL(ncclCommInitRank(&comm, totalRanks, commId, myRank));
 
-  // Bootstrap sub-communicator (ranks 0..N-2, excluding straggler)
-  // MPI_Comm_split is a collective: every rank must call it
-  // Non-straggler ranks get color=1; straggler gets MPI_UNDEFINED (excluded).
+  // Bootstrap sub-communicator (ranks 0..N-2, excluding straggler).
+  // Two-layer process (replaces ncclCommInitAll(subComms, N-1, NULL) from 4GPU version):
+  //   Layer 1 — MPI_Comm_split partitions the process group. Every rank must call it
+  //             (it's a collective); straggler passes MPI_UNDEFINED to exclude itself.
+  //   Layer 2 — repeat the ncclGetUniqueId + MPI_Bcast + ncclCommInitRank pattern,
+  //             but scoped to subMpiComm so rank 3 is excluded from the broadcast.
   ncclComm_t subComm = nullptr;
   MPI_Comm subMpiComm = MPI_COMM_NULL;
 
