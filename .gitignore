@@ -2,3 +2,4 @@
 .uv/
 __pycache__/
 *.pyc
+stragglar/tests/results/
