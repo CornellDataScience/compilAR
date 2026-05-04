@@ -281,6 +281,7 @@ run_bench_point() {
     printf "  %-10s  (sleep=%.1f ms)  ring..." "$label" "$sleep_ms"
 
     # Ring AllReduce baseline — rank 3 sleeps sleep_ms before all_reduce
+    RING_STDERR_FILE="$(mktemp)"
     RING_CSV="$(
         "$MPI" -n "$N_GPUS" --hostfile "$HOSTFILE" \
             -x MASTER_ADDR=compute1 \
@@ -288,14 +289,28 @@ run_bench_point() {
             -x NCCL_SOCKET_IFNAME="$NCCL_IFNAME" \
             -x LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
             "$PY" "$RING_SCRIPT" "$BUFFER_BYTES" "$ALLREDUCE_ITERS" "$sleep_ms" \
-            2>/dev/null
-    )"
-    RING_MEAN="$(echo "$RING_CSV" | awk -F, 'NR>1 && $1=="ring" {sum+=$5; n++} END {printf "%.3f", sum/n}')"
+            2>"$RING_STDERR_FILE"
+    )" || true
+
+    # Filter to actual data rows only (exclude the CSV header line)
+    RING_DATA="$(echo "$RING_CSV" | awk -F, '$1=="ring" && $3+0>0' || true)"
+    if [ -z "$RING_DATA" ]; then
+        printf "\n  ERROR: ring AllReduce produced no data (label=%s)\n" "$label" >&2
+        cat "$RING_STDERR_FILE" >&2
+        rm -f "$RING_STDERR_FILE"
+        echo "$label,$sleep_ms,ERROR,ERROR,ERROR" >> "$SPEEDUP_RESULTS"
+        return 0
+    fi
+    rm -f "$RING_STDERR_FILE"
+    RING_MEAN="$(echo "$RING_DATA" | awk -F, '{sum+=$5; n++} END {printf "%.3f", sum/n}')"
 
     printf "  done.  sar..."
 
+    # Brief pause so the OS releases port TIME_WAIT sockets from the ring run
+    sleep 2
+
     # StragglAR — ranks 0-2 overlap with rank 3's sleep using a sub-group AllReduce
-    SAR_STDERR="$(mktemp)"
+    SAR_STDERR_FILE="$(mktemp)"
     SAR_CSV="$(
         "$MPI" -n "$N_GPUS" --hostfile "$HOSTFILE" \
             -x MASTER_ADDR=compute1 \
@@ -303,44 +318,30 @@ run_bench_point() {
             -x NCCL_SOCKET_IFNAME="$NCCL_IFNAME" \
             -x LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
             "$PY" "$SAR_SCRIPT" "$BUFFER_BYTES" "$ALLREDUCE_ITERS" "$sleep_ms" \
-            2>"$SAR_STDERR"
+            2>"$SAR_STDERR_FILE"
     )" || true
 
-    SAR_DATA_LINES="$(echo "$SAR_CSV" | grep -c '^stragglar,' || true)"
-    if [ "${SAR_DATA_LINES:-0}" -eq 0 ]; then
-        printf "\n  ERROR: stragglar_allreduce.py produced no data for label=%s sleep_ms=%s\n" \
+    # Filter to actual data rows only — header has non-numeric third field
+    SAR_DATA="$(echo "$SAR_CSV" | awk -F, '$1=="stragglar" && $3+0>0' || true)"
+    if [ -z "$SAR_DATA" ]; then
+        printf "\n  ERROR: stragglar_allreduce.py produced no data (label=%s sleep_ms=%s)\n" \
             "$label" "$sleep_ms" >&2
-        printf "  SAR stderr output:\n" >&2
-        cat "$SAR_STDERR" >&2
-        rm -f "$SAR_STDERR"
+        printf "  --- SAR stderr ---\n" >&2
+        cat "$SAR_STDERR_FILE" >&2
+        printf "  --- SAR stdout (raw) ---\n" >&2
+        echo "$SAR_CSV" >&2
+        rm -f "$SAR_STDERR_FILE"
         echo "$label,$sleep_ms,$RING_MEAN,ERROR,ERROR" >> "$SPEEDUP_RESULTS"
-        echo "  (skipping this benchmark point)"
         return 0
     fi
-    rm -f "$SAR_STDERR"
+    rm -f "$SAR_STDERR_FILE"
 
-    # Median across all ranks per iteration, then average across iterations
-    SAR_MEAN="$(echo "$SAR_CSV" | awk -F, '
-        NR>1 && $1=="stragglar" {
-            iter=$3; times[iter] = times[iter] "," $5; n[iter]++
-        }
-        END {
-            total=0; count=0
-            for (it in times) {
-                split(times[it], arr, ",")
-                asort(arr)
-                mid = int(length(arr)/2)+1
-                total += arr[mid]; count++
-            }
-            if (count > 0) printf "%.3f", total/count
-            else print "0"
-        }
-    ')"
+    # Average runtime across all iterations (only rank 0 emits output)
+    SAR_MEAN="$(echo "$SAR_DATA" | awk -F, '{sum+=$5; n++} END {printf "%.3f", sum/n}')"
 
-    if [ -z "$SAR_MEAN" ] || [ "$SAR_MEAN" = "0" ]; then
-        printf "\n  ERROR: SAR_MEAN is empty or zero for label=%s\n" "$label" >&2
+    if [ -z "$SAR_MEAN" ] || [ "$SAR_MEAN" = "0" ] || [ "$SAR_MEAN" = "0.000" ]; then
+        printf "\n  ERROR: SAR_MEAN='%s' (label=%s)\n" "$SAR_MEAN" "$label" >&2
         echo "$label,$sleep_ms,$RING_MEAN,0,ERROR" >> "$SPEEDUP_RESULTS"
-        echo "  (skipping speedup calculation)"
         return 0
     fi
 
