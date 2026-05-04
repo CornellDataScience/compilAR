@@ -295,6 +295,7 @@ run_bench_point() {
     printf "  done.  sar..."
 
     # StragglAR — ranks 0-2 overlap with rank 3's sleep using a sub-group AllReduce
+    SAR_STDERR="$(mktemp)"
     SAR_CSV="$(
         "$MPI" -n "$N_GPUS" --hostfile "$HOSTFILE" \
             -x MASTER_ADDR=compute1 \
@@ -302,8 +303,22 @@ run_bench_point() {
             -x NCCL_SOCKET_IFNAME="$NCCL_IFNAME" \
             -x LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
             "$PY" "$SAR_SCRIPT" "$BUFFER_BYTES" "$ALLREDUCE_ITERS" "$sleep_ms" \
-            2>/dev/null
-    )"
+            2>"$SAR_STDERR"
+    )" || true
+
+    SAR_DATA_LINES="$(echo "$SAR_CSV" | grep -c '^stragglar,' || true)"
+    if [ "${SAR_DATA_LINES:-0}" -eq 0 ]; then
+        printf "\n  ERROR: stragglar_allreduce.py produced no data for label=%s sleep_ms=%s\n" \
+            "$label" "$sleep_ms" >&2
+        printf "  SAR stderr output:\n" >&2
+        cat "$SAR_STDERR" >&2
+        rm -f "$SAR_STDERR"
+        echo "$label,$sleep_ms,$RING_MEAN,ERROR,ERROR" >> "$SPEEDUP_RESULTS"
+        echo "  (skipping this benchmark point)"
+        return 0
+    fi
+    rm -f "$SAR_STDERR"
+
     # Median across all ranks per iteration, then average across iterations
     SAR_MEAN="$(echo "$SAR_CSV" | awk -F, '
         NR>1 && $1=="stragglar" {
@@ -317,9 +332,17 @@ run_bench_point() {
                 mid = int(length(arr)/2)+1
                 total += arr[mid]; count++
             }
-            printf "%.3f", total/count
+            if (count > 0) printf "%.3f", total/count
+            else print "0"
         }
     ')"
+
+    if [ -z "$SAR_MEAN" ] || [ "$SAR_MEAN" = "0" ]; then
+        printf "\n  ERROR: SAR_MEAN is empty or zero for label=%s\n" "$label" >&2
+        echo "$label,$sleep_ms,$RING_MEAN,0,ERROR" >> "$SPEEDUP_RESULTS"
+        echo "  (skipping speedup calculation)"
+        return 0
+    fi
 
     SPEEDUP="$(awk "BEGIN { printf \"%.4f\", $RING_MEAN / $SAR_MEAN }")"
 
