@@ -76,7 +76,7 @@ for trial in range(N_TRIALS):
     # per-rank timings are directly comparable.
     g = torch.Generator()
     g.manual_seed(trial)
-    n = int(torch.randint(4096, 10241, (1,), generator=g).item())
+    n = int(torch.randint(2048, 6145, (1,), generator=g).item())
 
     a = torch.randn(n, n, device=device)
     b = torch.randn(n, n, device=device)
@@ -91,6 +91,8 @@ for trial in range(N_TRIALS):
     torch.cuda.synchronize(device)
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0 / ITERS_PER_TRIAL
+    del a, b, c
+    torch.cuda.empty_cache()
 
     # Gather all timings to every rank (costs ~32 bytes over NCCL — negligible)
     t_tensor = torch.tensor([elapsed_ms], dtype=torch.float64, device=device)
