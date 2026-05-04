@@ -52,6 +52,7 @@ BUFFER_BYTES="${BUFFER_BYTES:-50331648}"     # 48 MiB
 NCCL_IFNAME="${NCCL_IFNAME:-enp5s0}"
 SMOKETEST_PORT="${SMOKETEST_PORT:-12345}"
 RING_PORT="${RING_PORT:-12346}"
+SAR_PORT="${SAR_PORT:-12347}"
 N_GPUS=4   # fixed: 2 nodes × 2 GPUs each
 
 # ---------------------------------------------------------------------------
@@ -62,6 +63,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 HOSTFILE="$SCRIPT_DIR/hostfile"
 MPI_SMOKETEST="$SCRIPT_DIR/mpi_smoketest.py"
 RING_SCRIPT="$SCRIPT_DIR/ring_allreduce_baseline.py"
+SAR_SCRIPT="$SCRIPT_DIR/stragglar_allreduce.py"
 PLOT_SCRIPT="$SCRIPT_DIR/plot_results.py"
 
 TIMESTAMP="$(date +%Y-%m-%d_%H-%M-%S)"
@@ -75,18 +77,8 @@ PY="${PY:-/home/cadmin/.conda/envs/compilar_env/bin/python3}"
 MPI="$(command -v mpirun || true)"
 [ -z "$MPI" ] && { echo "Error: mpirun not in PATH" >&2; exit 1; }
 
-# Binary: check common locations
-if [ -n "${BINARY:-}" ]; then
-    BINARY_PATH="$BINARY"
-elif [ -x "$PROJECT_ROOT/4gpu" ]; then
-    BINARY_PATH="$PROJECT_ROOT/4gpu"
-else
-    echo "Error: StragglAR binary not found. Set BINARY=/path or compile to $PROJECT_ROOT/4gpu" >&2
-    exit 1
-fi
-
 # Validate required files
-for f in "$HOSTFILE" "$MPI_SMOKETEST" "$RING_SCRIPT"; do
+for f in "$HOSTFILE" "$MPI_SMOKETEST" "$RING_SCRIPT" "$SAR_SCRIPT"; do
     [ ! -f "$f" ] && { echo "Error: required file not found: $f" >&2; exit 1; }
 done
 
@@ -112,7 +104,6 @@ echo " Ranks            : $N_GPUS  (2 per node)"
 echo " Significance runs: $N_TRIALS  (${ITERS_PER_TRIAL} GEMM iters each)"
 echo " AllReduce iters  : $ALLREDUCE_ITERS  per benchmark point"
 echo " Buffer           : $BUFFER_BYTES bytes  ($((BUFFER_BYTES/1024/1024)) MiB)"
-echo " Binary           : $BINARY_PATH"
 echo " NCCL interface   : $NCCL_IFNAME"
 echo " Results dir      : $RESULTS_DIR"
 echo "========================================================"
@@ -303,13 +294,14 @@ run_bench_point() {
 
     printf "  done.  sar..."
 
-    # StragglAR binary — rank 3 runs a CUDA sleep kernel for sleep_ms
+    # StragglAR — ranks 0-2 overlap with rank 3's sleep using a sub-group AllReduce
     SAR_CSV="$(
         "$MPI" -n "$N_GPUS" --hostfile "$HOSTFILE" \
-            -x CUDA_VISIBLE_DEVICES=0,1 \
+            -x MASTER_ADDR=compute1 \
+            -x MASTER_PORT="$SAR_PORT" \
             -x NCCL_SOCKET_IFNAME="$NCCL_IFNAME" \
             -x LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
-            "$BINARY_PATH" "$BUFFER_BYTES" stragglar "$ALLREDUCE_ITERS" "$sleep_ms" \
+            "$PY" "$SAR_SCRIPT" "$BUFFER_BYTES" "$ALLREDUCE_ITERS" "$sleep_ms" \
             2>/dev/null
     )"
     # Median across all ranks per iteration, then average across iterations
