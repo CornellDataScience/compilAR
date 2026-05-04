@@ -359,6 +359,22 @@ run_bench_point "median" "$D_P50"
 run_bench_point "p75"    "$D_P75"
 run_bench_point "max"    "$D_MAX"
 
+# ---------------------------------------------------------------------------
+# Artificial delay sweep — demonstrates StragglAR overlap benefit when the
+# straggler delay is large relative to the AllReduce time (~650 ms on this
+# hardware for 48 MiB over 1 GbE).  These points are not from real hardware
+# measurements; they are fixed synthetic delays added on top of the normal run.
+# ---------------------------------------------------------------------------
+SYNTH_DELAYS="${SYNTH_DELAYS:-650 1000}"
+if [ -n "$SYNTH_DELAYS" ]; then
+    echo ""
+    echo "  Synthetic delay sweep (showing overlap benefit at large straggler delays):"
+    echo ""
+    for d in $SYNTH_DELAYS; do
+        run_bench_point "synth_${d}ms" "$d"
+    done
+fi
+
 echo ""
 echo "Saved: $SPEEDUP_RESULTS"
 echo ""
@@ -380,15 +396,29 @@ summary_out     = sys.argv[6]
 with open(sig_json) as f:
     sig = json.load(f)
 
-speedup_rows = []
+all_rows = []
 with open(speedup_csv) as f:
     for row in csv.DictReader(f):
-        speedup_rows.append(row)
+        all_rows.append(row)
 
-speedups = [float(r["speedup"]) for r in speedup_rows]
-avg_sp   = statistics.mean(speedups)
-best_row = max(speedup_rows, key=lambda r: float(r["speedup"]))
-best_sp  = float(best_row["speedup"])
+real_rows  = [r for r in all_rows if not r["label"].startswith("synth_")]
+synth_rows = [r for r in all_rows if r["label"].startswith("synth_")]
+
+def safe_float(v):
+    try: return float(v)
+    except: return None
+
+hdr = f" {'Point':<16}  {'Sleep(ms)':>10}  {'Ring(ms)':>10}  {'SAR(ms)':>10}  {'Speedup':>9}"
+sep = f" {'-'*16}  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*9}"
+
+def fmt_row(r):
+    sp = safe_float(r["speedup"])
+    sp_str = f"{sp:>8.4f}x" if sp is not None else f"{'ERROR':>9}"
+    try:
+        return (f" {r['label']:<16}  {float(r['sleep_ms']):>10.1f}  "
+                f"{float(r['ring_ms']):>10.3f}  {float(r['sar_ms']):>10.3f}  {sp_str}")
+    except:
+        return f" {r['label']:<16}  {r['sleep_ms']:>10}  {r['ring_ms']:>10}  {r['sar_ms']:>10}  {sp_str}"
 
 lines = []
 lines.append("========================================================")
@@ -404,17 +434,30 @@ lines.append(f" Chi-squared test    : {chi_label}  "
              + (f", p={sig['chi2_p']:.2e}" if sig["chi2_p"] is not None else "") + ")")
 lines.append(f" Binomial test       : {bi_label}  "
              f"(p={sig['binomial_p']:.2e})")
+
 lines.append("")
-lines.append(f" {'Point':<10}  {'Sleep(ms)':>10}  {'Ring(ms)':>10}  {'SAR(ms)':>10}  {'Speedup':>9}")
-lines.append(f" {'-'*10}  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*9}")
-for r in speedup_rows:
-    lines.append(f" {r['label']:<10}  {float(r['sleep_ms']):>10.1f}  "
-                 f"{float(r['ring_ms']):>10.3f}  {float(r['sar_ms']):>10.3f}  "
-                 f"{float(r['speedup']):>8.4f}x")
-lines.append("")
-lines.append(f" Average speedup : {avg_sp:.4f}x  (across all 5 delay points)")
-lines.append(f" Best run        : {best_sp:.4f}x  "
-             f"(at {best_row['label']} delay = {float(best_row['sleep_ms']):.1f} ms)")
+lines.append(" Real hardware straggler delays (from Phase 1 GEMM trials):")
+lines.append(hdr)
+lines.append(sep)
+for r in real_rows:
+    lines.append(fmt_row(r))
+real_speedups = [safe_float(r["speedup"]) for r in real_rows if safe_float(r["speedup"]) is not None]
+if real_speedups:
+    lines.append(f"\n Average speedup (real delays) : {statistics.mean(real_speedups):.4f}x")
+
+if synth_rows:
+    lines.append("")
+    lines.append(" Synthetic delays (demonstrating overlap benefit at larger straggler gaps):")
+    lines.append(hdr)
+    lines.append(sep)
+    for r in synth_rows:
+        lines.append(fmt_row(r))
+    synth_speedups = [safe_float(r["speedup"]) for r in synth_rows if safe_float(r["speedup"]) is not None]
+    if synth_speedups:
+        best = max(synth_rows, key=lambda r: safe_float(r["speedup"]) or 0)
+        lines.append(f"\n Best synthetic speedup : {max(synth_speedups):.4f}x  "
+                     f"(at {best['label']} = {float(best['sleep_ms']):.0f} ms delay)")
+
 lines.append("========================================================")
 
 report = "\n".join(lines)
