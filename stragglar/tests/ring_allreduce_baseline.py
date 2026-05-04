@@ -1,61 +1,78 @@
 #!/usr/bin/env python3
 """
-ring_allreduce_baseline.py — Ring AllReduce timing baseline using PyTorch NCCL.
+ring_allreduce_baseline.py — Ring AllReduce timing baseline, MPI worker.
 
-Launches 4 processes (one per GPU) via torch.multiprocessing.spawn.
-GPU (world_size - 1) sleeps for SLEEP_MS before joining the all_reduce,
-simulating the same straggler scenario as the StragglAR binary.
+Must be launched via mpirun -n 4 with MASTER_ADDR, MASTER_PORT, and
+NCCL_SOCKET_IFNAME in the environment (use mpirun -x flags).
+
+Each of the 4 MPI ranks handles one GPU:
+    local_rank = OMPI_COMM_WORLD_LOCAL_RANK  (0 or 1 per node)
+    rank       = OMPI_COMM_WORLD_RANK        (0–3 globally)
+
+Rank (world_size-1) = rank 3 sleeps for SLEEP_MS before calling all_reduce,
+reproducing the same straggler scenario as the StragglAR binary.
 
 Output CSV (rank 0 only):
     ring,<buffer_bytes>,<iteration>,<sleep_ms>,<runtime_ms>,<BW(GB/s)>
 
-Usage:
-    python3 ring_allreduce_baseline.py <buffer_bytes> <num_iters> <sleep_ms>
-
-Arguments:
-    buffer_bytes  total buffer size in bytes (must be divisible by 4)
-    num_iters     number of timed iterations (one warmup pass is added automatically)
-    sleep_ms      straggler delay in ms for rank (world_size-1); 0 = no straggler
-
-Example:
-    python3 ring_allreduce_baseline.py 50331648 20 50
+Usage (via run_tests.sh / mpirun):
+    mpirun -n 4 --hostfile hostfile \\
+        -x MASTER_ADDR=compute1 -x MASTER_PORT=12346 \\
+        -x NCCL_SOCKET_IFNAME=enp5s0 \\
+        python3 ring_allreduce_baseline.py <buffer_bytes> <num_iters> <sleep_ms>
 """
 
 import os
 import sys
 import time
+
 import torch
 import torch.distributed as dist
-import torch.multiprocessing as mp
 
-NUM_GPUS  = 4
 NUM_WARMUP = 3
-STRAGGLER_RANK = NUM_GPUS - 1   # rank 3 = GPU 3, matching the StragglAR binary
 
-MASTER_ADDR = os.environ.get("MASTER_ADDR", "localhost")
-MASTER_PORT = os.environ.get("MASTER_PORT", "12345")
+rank       = int(os.environ.get("OMPI_COMM_WORLD_RANK",       os.environ.get("RANK",       "0")))
+local_rank = int(os.environ.get("OMPI_COMM_WORLD_LOCAL_RANK", os.environ.get("LOCAL_RANK", "0")))
+world_size = int(os.environ.get("OMPI_COMM_WORLD_SIZE",       os.environ.get("WORLD_SIZE", "4")))
+
+os.environ["RANK"]       = str(rank)
+os.environ["WORLD_SIZE"] = str(world_size)
+
+STRAGGLER_RANK = world_size - 1   # rank 3 = compute4 GPU 1
 
 
-def _worker(rank: int, world_size: int, buffer_bytes: int, num_iters: int, sleep_ms: float):
-    os.environ["MASTER_ADDR"] = MASTER_ADDR
-    os.environ["MASTER_PORT"] = MASTER_PORT
+def main():
+    if len(sys.argv) != 4:
+        if rank == 0:
+            print(
+                f"Usage: mpirun -n {world_size} ... {sys.argv[0]}"
+                " <buffer_bytes> <num_iters> <sleep_ms>",
+                file=sys.stderr,
+            )
+        sys.exit(1)
 
-    dist.init_process_group(
-        backend   = "nccl",
-        rank      = rank,
-        world_size = world_size,
-    )
-    torch.cuda.set_device(rank)
-    device = torch.device(f"cuda:{rank}")
+    buffer_bytes = int(sys.argv[1])
+    num_iters    = int(sys.argv[2])
+    sleep_ms     = float(sys.argv[3])
+
+    if buffer_bytes % 4 != 0:
+        if rank == 0:
+            print("Error: buffer_bytes must be divisible by 4", file=sys.stderr)
+        sys.exit(1)
+
+    torch.cuda.set_device(local_rank)
+    device = torch.device(f"cuda:{local_rank}")
+
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
     n_floats = buffer_bytes // 4
     buf = torch.ones(n_floats, dtype=torch.float32, device=device)
 
-    # Warmup — ensure NCCL and CUDA context are fully initialized before timing
+    # Warmup: initialize NCCL communication paths before timing
     for _ in range(NUM_WARMUP):
         dist.barrier()
         dist.all_reduce(buf, op=dist.ReduceOp.SUM)
-    torch.cuda.synchronize(device)
+        torch.cuda.synchronize(device)
     buf.fill_(1.0)
 
     if rank == 0:
@@ -65,63 +82,26 @@ def _worker(rank: int, world_size: int, buffer_bytes: int, num_iters: int, sleep
         buf.fill_(1.0)
         torch.cuda.synchronize(device)
 
-        # All ranks sync so the straggler's sleep is included in timing for
-        # every rank — matching how the StragglAR binary uses CUDA events.
+        # All ranks enter the timed window together; the straggler's sleep is
+        # fully included in every rank's measurement.
         dist.barrier()
         t0 = time.perf_counter()
 
-        # Straggler delay: rank (world_size-1) sleeps before calling all_reduce,
-        # blocking the ring until it participates.
         if rank == STRAGGLER_RANK and sleep_ms > 0:
             time.sleep(sleep_ms / 1000.0)
 
         dist.all_reduce(buf, op=dist.ReduceOp.SUM)
         torch.cuda.synchronize(device)
 
-        t1 = time.perf_counter()
-        ms = (t1 - t0) * 1000.0
-
-        # Effective bandwidth: (2 * (N-1) / N) * bytes / time  [ring formula]
-        bw = (2.0 * (world_size - 1) / world_size * buffer_bytes) / (t1 - t0) / 1e9
+        t1  = time.perf_counter()
+        ms  = (t1 - t0) * 1000.0
+        bw  = (2.0 * (world_size - 1) / world_size * buffer_bytes) / (t1 - t0) / 1e9
 
         if rank == 0:
-            print(
-                f"ring,{buffer_bytes},{it},{sleep_ms:.3f},{ms:.3f},{bw:.3f}",
-                flush=True,
-            )
+            print(f"ring,{buffer_bytes},{it},{sleep_ms:.3f},{ms:.3f},{bw:.3f}", flush=True)
 
     dist.barrier()
     dist.destroy_process_group()
-
-
-def main():
-    if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <buffer_bytes> <num_iters> <sleep_ms>", file=sys.stderr)
-        sys.exit(1)
-
-    buffer_bytes = int(sys.argv[1])
-    num_iters    = int(sys.argv[2])
-    sleep_ms     = float(sys.argv[3])
-
-    if buffer_bytes % 4 != 0:
-        print(f"Error: buffer_bytes must be divisible by 4 (got {buffer_bytes})", file=sys.stderr)
-        sys.exit(1)
-
-    if not torch.cuda.is_available():
-        print("Error: No CUDA devices found.", file=sys.stderr)
-        sys.exit(1)
-
-    n_gpus = torch.cuda.device_count()
-    if n_gpus < NUM_GPUS:
-        print(f"Error: need {NUM_GPUS} GPUs, found {n_gpus}", file=sys.stderr)
-        sys.exit(1)
-
-    mp.spawn(
-        _worker,
-        args    = (NUM_GPUS, buffer_bytes, num_iters, sleep_ms),
-        nprocs  = NUM_GPUS,
-        join    = True,
-    )
 
 
 if __name__ == "__main__":

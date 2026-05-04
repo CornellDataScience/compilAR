@@ -1,31 +1,51 @@
 # StragglAR Test Suite
 
-Tests for straggler detection significance and AllReduce speedup on a real 4-GPU cluster.
+Tests for straggler detection significance and AllReduce speedup on a real 2-node, 4-GPU cluster.
+
+## Cluster topology
+
+| Node | GPUs | MPI ranks |
+|---|---|---|
+| `compute1` | 2× RTX 2080 Ti (GPU 0, GPU 1) | 0, 1 |
+| `compute4` | 2× GTX 1070   (GPU 0, GPU 1) | 2, 3 |
+
+The nodes communicate over the `enp5s0` interface.  There is no shared filesystem; both nodes must have the project checked out at the same path and the conda environment synced (see below).
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `run_tests.sh` | Main test script — runs all five phases end-to-end |
-| `ring_allreduce_baseline.py` | Ring AllReduce timing helper called by `run_tests.sh` |
+| `mpi_smoketest.py` | MPI worker for Phase 1 — each rank times a GEMM on its local GPU |
+| `ring_allreduce_baseline.py` | MPI worker for Phase 3 — ring AllReduce timing baseline |
+| `hostfile` | OpenMPI hostfile (`compute1 slots=2` / `compute4 slots=2`) |
 | `plot_results.py` | Standalone plotting script — reads a results directory and generates graphs |
 
 ## Requirements
 
 | Requirement | Notes |
 |---|---|
-| 4× NVIDIA GPUs | GPUs 0–3 must be visible via `nvidia-smi` |
+| 2 nodes: `compute1`, `compute4` | Both must be reachable via passwordless SSH |
+| 4× NVIDIA GPUs | 2 per node, visible via `nvidia-smi` |
 | CUDA driver | Tested with driver ≥ 535 |
-| `mpirun` (OpenMPI) | For launching the StragglAR binary |
-| `python3` with `torch` | PyTorch ≥ 2.10 with NCCL support |
+| `mpirun` (OpenMPI 4.x) | Must be on PATH on both nodes |
+| `python3` with `torch` + NCCL | Tested with PyTorch pip wheel (cu124); **same env on both nodes** |
 | `scipy` | For exact p-values — falls back to normal approximation if missing |
 | `matplotlib` + `numpy` | For plot generation |
-| StragglAR binary (`4gpu`) | Must be compiled and present at the project root |
+| StragglAR binary (`4gpu`) | Must be compiled and present at the project root on **both** nodes |
 
-Install optional dependencies:
+### Syncing the conda environment to compute4
 
 ```bash
-pip install scipy matplotlib numpy
+# Run once from compute1 after installing on compute1
+rsync -az /home/cadmin/.conda/envs/compilar_env/ compute4:/home/cadmin/.conda/envs/compilar_env/
+```
+
+Install optional Python dependencies (then re-sync):
+
+```bash
+/home/cadmin/.conda/envs/compilar_env/bin/pip install scipy matplotlib numpy
+rsync -az /home/cadmin/.conda/envs/compilar_env/ compute4:/home/cadmin/.conda/envs/compilar_env/
 ```
 
 ## Quick Start
@@ -37,9 +57,9 @@ cd /path/to/compilAR
 ./stragglar/tests/run_tests.sh
 ```
 
-The script auto-detects the `4gpu` binary at the project root and all four GPUs.
+The script uses `/home/cadmin/.conda/envs/compilar_env/bin/python3` on both nodes and auto-detects the `4gpu` binary at the project root.
 
-Expected runtime with default settings: **~45–60 minutes** (1000 smoketest trials × ~3s each, plus 10 AllReduce benchmark runs).
+Expected runtime with default settings: **~45–60 minutes** (1000 smoketest trials plus 10 AllReduce benchmark runs).
 
 ---
 
@@ -49,20 +69,21 @@ The test suite runs in five sequential phases, sharing data between them so the 
 
 ### Phase 1 — Straggler detection trials
 
-Runs `smoketest.py` 1000 times. Each trial:
+Launches `mpi_smoketest.py` across all 4 ranks via a single `mpirun` call.  Each trial:
 
-1. Launches randomized matrix multiplication (GEMM) on all 4 GPUs in parallel.
-2. Records which GPU finishes last — the **straggler GPU**.
-3. Records **`delta_ms`** — how many milliseconds behind the second-to-last GPU the straggler was.
+1. All 4 ranks synchronise with an NCCL barrier.
+2. Each rank runs the same randomized matrix multiplication (GEMM) on its local GPU.
+3. Timings are collected to rank 0 via `dist.all_gather`.
+4. Rank 0 records which rank finished last — the **straggler rank** — and **`delta_ms`** — how many milliseconds behind the second-to-last rank it was.
 
-The GEMM workload uses the same matrix size for all GPUs each trial (sampled randomly from 4096² to 10240²), with a fixed seed per trial for reproducibility. Timing differences emerge naturally from real hardware variation: thermal throttling, clock jitter, memory bandwidth differences, etc.
+The GEMM matrix size is the same for all 4 ranks each trial (sampled randomly from 4096² to 10240² using the trial number as a seed).  Timing differences emerge from real hardware: the GTX 1070s on compute4 (ranks 2–3) are slower than the RTX 2080 Tis on compute1 (ranks 0–1).
 
-Each trial emits one line:
+Each trial emits one line (rank 0 stdout):
 ```
-STRAGGLER_REPORT=<hostname>:<gpu_id>:<delta_ms>
+STRAGGLER_REPORT=<trial_0indexed>:<straggler_rank>:<delta_ms>
 ```
 
-All other smoketest output is suppressed. Progress is printed every 100 trials with an ETA.
+Progress is printed to stderr every 100 trials with an ETA.
 
 ### Phase 2 — Significance analysis
 
@@ -92,14 +113,15 @@ Uses the five real delay quantiles from Phase 1 as the `sleep_ms` input for the 
 
 **Ring AllReduce baseline** (`ring_allreduce_baseline.py`)
 
-- Launches 4 processes (one per GPU) via `torch.multiprocessing.spawn`.
-- GPU 3 (the straggler rank, matching the StragglAR binary convention) sleeps for `sleep_ms` before calling `torch.distributed.all_reduce`.
-- Because all ranks must call `all_reduce` before NCCL can proceed, the other three ranks block waiting for GPU 3. Total time ≈ `sleep_ms` + ring allreduce time.
+- Launched via `mpirun -n 4 --hostfile hostfile` (one rank per GPU, 2 per node).
+- Each rank reads its `OMPI_COMM_WORLD_LOCAL_RANK` to select its local CUDA device.
+- Rank 3 (compute4 GPU 1, matching the StragglAR binary convention) sleeps for `sleep_ms` before calling `torch.distributed.all_reduce`.
+- Because all ranks must call `all_reduce` before NCCL can proceed, the other three ranks block waiting for rank 3. Total time ≈ `sleep_ms` + ring allreduce time.
 - Outputs CSV: `ring,<buffer_bytes>,<iter>,<sleep_ms>,<runtime_ms>,<BW(GB/s)>`
 
-**StragglAR binary** (`./4gpu` via `mpirun -n 4`)
+**StragglAR binary** (`./4gpu` via `mpirun -n 4 --hostfile hostfile`)
 
-- Launched with `CUDA_VISIBLE_DEVICES=0,1,2,3` so rank *i* maps to GPU *i*.
+- Launched with `CUDA_VISIBLE_DEVICES=0,1` so each node sees only its 2 local GPUs. Rank *r* maps to GPU `r % 2` on its node.
 - Rank 3 runs a CUDA sleep kernel for `sleep_ms` before participating.
 - While rank 3 sleeps, ranks 0–2 perform a reduce-scatter among themselves, overlapping the straggler delay.
 - Outputs the same CSV format per rank; the script takes the median across all 4 ranks per iteration, then averages across iterations.
@@ -231,11 +253,14 @@ All settings can be overridden with environment variables. No changes to the scr
 
 | Variable | Default | Description |
 |---|---|---|
-| `GPUS` | `"0 1 2 3"` | Space-separated GPU indices to use |
 | `N_TRIALS` | `1000` | Number of smoketest trials for the significance test |
 | `ITERS_PER_TRIAL` | `5` | Timed GEMM iterations per smoketest trial |
 | `ALLREDUCE_ITERS` | `20` | Timed AllReduce iterations per benchmark point |
 | `BUFFER_BYTES` | `50331648` | AllReduce buffer size (48 MiB) — must be divisible by `(N-1) × 4 = 12` |
+| `NCCL_IFNAME` | `enp5s0` | Network interface NCCL uses for inter-node communication |
+| `SMOKETEST_PORT` | `12345` | NCCL rendezvous port for Phase 1 |
+| `RING_PORT` | `12346` | NCCL rendezvous port for Phase 3 ring baseline |
+| `PY` | `/home/cadmin/.conda/envs/compilar_env/bin/python3` | Python binary (must exist on both nodes at this path) |
 | `BINARY` | auto | Path to the StragglAR binary; auto-detected at `../../4gpu` |
 | `RESULTS_DIR` | `results/<timestamp>` | Where to write all output files and plots |
 
@@ -247,16 +272,22 @@ Faster run with fewer trials (useful for smoke-checking the setup):
 N_TRIALS=50 ITERS_PER_TRIAL=3 ./stragglar/tests/run_tests.sh
 ```
 
-Use a custom GPU set or binary path:
+Custom binary path or results directory:
 
 ```bash
-GPUS="4 5 6 7" BINARY=/scratch/my_4gpu ./stragglar/tests/run_tests.sh
+BINARY=/scratch/my_4gpu RESULTS_DIR=/scratch/run1 ./stragglar/tests/run_tests.sh
 ```
 
 Larger buffer for bandwidth-bound profiling:
 
 ```bash
 BUFFER_BYTES=201326592 ./stragglar/tests/run_tests.sh   # 192 MiB
+```
+
+Override the network interface (e.g. if compute1 uses a different name):
+
+```bash
+NCCL_IFNAME=eth0 ./stragglar/tests/run_tests.sh
 ```
 
 ---
