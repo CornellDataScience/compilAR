@@ -87,7 +87,7 @@ def main():
             dist.all_reduce(tmp, group=healthy_group)
         dist.barrier()
         strag_w = buf.clone() if rank == STRAGGLER_RANK else torch.zeros_like(buf)
-        dist.all_reduce(strag_w)
+        dist.broadcast(strag_w, src=STRAGGLER_RANK)
         torch.cuda.synchronize(device)
 
     if rank == 0:
@@ -117,10 +117,12 @@ def main():
         dist.barrier()
 
         # ── Phase 3 (merge) ─────────────────────────────────────────────────
-        # Broadcast the straggler's original data to all ranks and add it to
-        # the partial sum held by the healthy ranks.
+        # Broadcast the straggler's original buffer to all ranks, then add it
+        # to the partial sum held by the healthy ranks.
+        # broadcast (one-to-all) costs ~half the bandwidth of all_reduce,
+        # making the merge step ~2x cheaper than a full AllReduce.
         strag = buf.clone() if rank == STRAGGLER_RANK else torch.zeros_like(buf)
-        dist.all_reduce(strag, op=dist.ReduceOp.SUM)   # all ranks receive rank-3 data
+        dist.broadcast(strag, src=STRAGGLER_RANK)
         buf.add_(strag)
         # After merge: ranks 0-2 hold sum(0,1,2) + rank3 = sum(all 4 ranks) ✓
 
