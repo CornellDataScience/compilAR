@@ -365,7 +365,7 @@ run_bench_point "max"    "$D_MAX"
 # hardware for 48 MiB over 1 GbE).  These points are not from real hardware
 # measurements; they are fixed synthetic delays added on top of the normal run.
 # ---------------------------------------------------------------------------
-SYNTH_DELAYS="${SYNTH_DELAYS:-650 1000}"
+SYNTH_DELAYS="${SYNTH_DELAYS:-650 1000 2000}"
 if [ -n "$SYNTH_DELAYS" ]; then
     echo ""
     echo "  Synthetic delay sweep (showing overlap benefit at large straggler delays):"
