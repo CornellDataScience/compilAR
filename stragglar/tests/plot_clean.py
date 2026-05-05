@@ -346,11 +346,10 @@ def plot_gpu_scaling(ax):
     gpu_counts = [4, 8, 16, 32, 64, 128]
 
     sleep_scenarios = [
-        (100,  "δ = 100 ms",  SLATE,  "--"),
-        (650,  "δ = 650 ms\n(crossover @ N=4)", AMBER, "-."),
-        (1000, "δ = 1000 ms", BLUE,   "-"),
-        (2000, "δ = 2000 ms", PURPLE, "-"),
-        (5000, "δ = 5000 ms", TEAL,   "-"),
+        (650,  "δ = 650 ms  (crossover @ N=4)", AMBER,  "-."),
+        (1000, "δ = 1000 ms",                   BLUE,   "-"),
+        (2000, "δ = 2000 ms",                   PURPLE, "-"),
+        (5000, "δ = 5000 ms",                   TEAL,   "-"),
     ]
 
     for sleep_ms, label, color, ls in sleep_scenarios:
@@ -364,13 +363,13 @@ def plot_gpu_scaling(ax):
 
     # Annotate measured points (N=4)
     measured = [
-        (650,  1.1966, "measured\n1.20×"),
-        (1000, 1.1504, "measured\n1.15×"),
-        (2000, 1.0884, "measured\n1.09×"),
+        (650,  1.1966, "measured 1.20×"),
+        (1000, 1.1504, "measured 1.15×"),
+        (2000, 1.0884, "measured 1.09×"),
     ]
     for sleep_ms, sp, note in measured:
         ax.annotate(note, (4, sp), textcoords="offset points",
-                    xytext=(12, 0), fontsize=7.5, color=SLATE,
+                    xytext=(15, 3), fontsize=8, color=SLATE,
                     arrowprops=dict(arrowstyle="->", color=SLATE, lw=0.8))
 
     ax.axhline(1.0, color=SLATE, linestyle=":", linewidth=1.2,
@@ -386,8 +385,9 @@ def plot_gpu_scaling(ax):
         "(bandwidth-bound model, 48 MiB buffer, 1 GbE inter-node)",
         fontweight="bold", pad=10,
     )
-    ax.legend(loc="center right", fontsize=9, ncol=1)
-    ax.set_ylim(0.85, None)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15),
+              ncol=3, fontsize=9, framealpha=0.9)
+    ax.set_ylim(0.95, None)
 
     note = ("Assumes single 1 GbE bottleneck per node pair.\n"
             "High-bandwidth fabrics (InfiniBand, RoCE) shift curves\n"
