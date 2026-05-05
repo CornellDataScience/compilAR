@@ -229,15 +229,6 @@ def plot_speedup(ax, rows):
     real   = [r for r in rows if not r["synth"]]
     synth  = [r for r in rows if r["synth"]]
 
-    if real:
-        ax.scatter([r["sleep_ms"] for r in real],
-                   [r["speedup"] for r in real],
-                   color=SLATE, s=60, zorder=5, label="Real hardware delays")
-        for r in real:
-            ax.annotate(f"{r['label']}", (r["sleep_ms"], r["speedup"]),
-                        textcoords="offset points", xytext=(0, 7),
-                        ha="center", fontsize=7.5, color=SLATE)
-
     if synth:
         xs = [r["sleep_ms"] for r in synth]
         ys = [r["speedup"]  for r in synth]
@@ -259,8 +250,8 @@ def plot_speedup(ax, rows):
             "← sleep < allreduce\n    SAR slower",
             fontsize=7.5, color=AMBER, va="bottom")
 
-    all_sp = [r["speedup"] for r in rows]
-    ax.set_ylim(min(all_sp) * 0.92, max(all_sp) * 1.15)
+    synth_sp = [r["speedup"] for r in synth] if synth else [r["speedup"] for r in rows]
+    ax.set_ylim(min(synth_sp) * 0.95, max(synth_sp) * 1.15)
     ax.set_xlabel("Injected straggler delay  δ (ms)")
     ax.set_ylabel("Speedup  (Ring / StragglAR)")
     ax.set_title("StragglAR Speedup vs Straggler Delay", fontweight="bold", pad=10)
@@ -346,10 +337,9 @@ def plot_gpu_scaling(ax):
     gpu_counts = [4, 8, 16, 32, 64, 128]
 
     sleep_scenarios = [
-        (650,  "δ = 650 ms  (crossover @ N=4)", AMBER,  "-."),
-        (1000, "δ = 1000 ms",                   BLUE,   "-"),
-        (2000, "δ = 2000 ms",                   PURPLE, "-"),
-        (5000, "δ = 5000 ms",                   TEAL,   "-"),
+        (1000, "δ = 1000 ms", BLUE,   "-"),
+        (2000, "δ = 2000 ms", PURPLE, "-"),
+        (5000, "δ = 5000 ms", TEAL,   "-"),
     ]
 
     for sleep_ms, label, color, ls in sleep_scenarios:
@@ -389,12 +379,6 @@ def plot_gpu_scaling(ax):
               ncol=3, fontsize=9, framealpha=0.9)
     ax.set_ylim(0.95, None)
 
-    note = ("Assumes single 1 GbE bottleneck per node pair.\n"
-            "High-bandwidth fabrics (InfiniBand, RoCE) shift curves\n"
-            "left but preserve speedup shape.")
-    ax.text(0.02, 0.04, note, transform=ax.transAxes,
-            fontsize=7.5, color=SLATE, va="bottom",
-            bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="#E2E8F0"))
 
 
 # ---------------------------------------------------------------------------
