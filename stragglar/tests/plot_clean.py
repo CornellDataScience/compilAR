@@ -263,9 +263,11 @@ def plot_speedup(ax, rows):
 # ---------------------------------------------------------------------------
 
 def plot_timing(ax, rows):
-    synth = [r for r in rows if r["synth"]]
+    synth = [r for r in rows if r["synth"] and r["sleep_ms"] < 2000]
     if not synth:
-        synth = rows  # fallback
+        synth = [r for r in rows if r["synth"]]
+    if not synth:
+        synth = rows
 
     labels    = [r["label"]   for r in synth]
     ring_vals = [r["ring_ms"] for r in synth]
@@ -351,17 +353,6 @@ def plot_gpu_scaling(ax):
         ax.plot(gpu_counts, speedups, color=color, linestyle=ls,
                 linewidth=2.0, marker="o", markersize=5, label=label, zorder=4)
 
-    # Annotate measured points (N=4)
-    measured = [
-        (650,  1.1966, "measured 1.20×"),
-        (1000, 1.1504, "measured 1.15×"),
-        (2000, 1.0884, "measured 1.09×"),
-    ]
-    for sleep_ms, sp, note in measured:
-        ax.annotate(note, (4, sp), textcoords="offset points",
-                    xytext=(15, 3), fontsize=8, color=SLATE,
-                    arrowprops=dict(arrowstyle="->", color=SLATE, lw=0.8))
-
     ax.axhline(1.0, color=SLATE, linestyle=":", linewidth=1.2,
                label="No speedup (1.0×)", zorder=2)
 
@@ -371,8 +362,7 @@ def plot_gpu_scaling(ax):
     ax.set_xlabel("Number of GPUs  (N)")
     ax.set_ylabel("Speedup  (Ring / StragglAR)")
     ax.set_title(
-        "Projected StragglAR Speedup vs Cluster Size\n"
-        "(bandwidth-bound model, 48 MiB buffer, 1 GbE inter-node)",
+        "Projected StragglAR Speedup vs Cluster Size",
         fontweight="bold", pad=10,
     )
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15),
