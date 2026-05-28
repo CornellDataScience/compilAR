@@ -6,6 +6,9 @@ compilAR is a compiler and runtime for straggler-aware AllReduce over GPU cluste
 
 The core problem it solves is that standard AllReduce algorithms (ring, tree, recursive-halving-doubling) stall every healthy rank until the slowest GPU catches up. StragglAR lets the N-1 healthy ranks make progress among themselves while the straggler is still computing, then merges the straggler's contribution with a minimal number of additional communication rounds once it is ready.
 
+<img width="1422" height="825" alt="Screenshot 2026-05-28 at 2 12 12 PM" src="https://github.com/user-attachments/assets/0fcacc38-66ab-4a56-94d3-8db9fe4a1cc0" />
+
+
 ## How It Works
 
 ### The algorithm
