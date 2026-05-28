@@ -2,7 +2,7 @@
 
 ## Overview
 
-compilAR is a compiler and runtime for straggler-aware AllReduce over GPU clusters, inspired by the paper [Efficient AllReduce with Stragglers](https://arxiv.org/pdf/2505.23523) (Devraj et al.). It takes a schedule produced by the StragglAR algorithm as input and emits a complete, standalone CUDA + MPI + NCCL implementation of that schedule for any number of GPUs.
+compilAR is a distributed GPU communication compiler for straggler-resilient AllReduce. Inspired by the paper [Efficient AllReduce with Stragglers](https://arxiv.org/pdf/2505.23523) (Devraj et al.), it takes a schedule produced by the StragglAR algorithm as input and emits a complete, standalone CUDA + MPI + NCCL implementation of that schedule for any number of GPUs.
 
 The core problem it solves is that standard AllReduce algorithms (ring, tree, recursive-halving-doubling) stall every healthy rank until the slowest GPU catches up. StragglAR lets the N-1 healthy ranks make progress among themselves while the straggler is still computing, then merges the straggler's contribution with a minimal number of additional communication rounds once it is ready.
 
