@@ -165,6 +165,19 @@ Each MPI process binds to its GPU via `LOCAL_RANK` (set by `mpirun`, `torchrun`,
 - **Correctness check assumes the built-in fill pattern.** `kExpectedSum = 6.0f` only holds when the straggler fills its buffer with the arbitrary `3.0f` and each non-straggler fills its own chunk. Replace this check when wiring real input data.
 - **Clock-based straggler delay is calibrated to device 0.** On heterogeneous-clock GPUs, `sleep_ms` won't match wall-clock ms on other devices. Doesn't affect correctness.
 
+## Key Results
+
+We achieved ~1.3x speedup compared to standard Ring AllReduce on our in-house CDS Compute Cluster. This is with a deliberate 50 ms simulated delay to showcase how stragglers are handled, and across multiple nodes with heterogeneous and hardware (RTX 2080 Ti and GTX 1070). We reasonably project that on production or research grade homogeneous hardware on a single host device, we can approach a 2x speedup compared to traditional AllReduce methods. 
+
+<img width="579" height="419" alt="Screenshot 2026-05-28 at 2 38 06 PM" src="https://github.com/user-attachments/assets/27e69058-5555-48c4-a15f-1df60ecd96c6" /> 
+<img width="619" height="374" alt="Screenshot 2026-05-28 at 2 40 57 PM" src="https://github.com/user-attachments/assets/ce3e45ae-bf66-4c7b-8886-0a4e9603294e" />
+
+
+Our straggler detection system also correctly identifies the slowest GPU. In our in-house tests, one of our nodes had older GPUs and so they were always identified as the stragglers at a statistically significant rate. 
+
+<img width="524" height="379" alt="Screenshot 2026-05-28 at 2 40 33 PM" src="https://github.com/user-attachments/assets/b68860d3-c1ab-4e2b-a2ef-051c75a86191" />
+
+
 ## Acknowledgements
 
 The StragglAR algorithm and the schedule synthesizer in `stragglar/schedules/` are the work of Devraj et al., [Efficient AllReduce with Stragglers](https://arxiv.org/pdf/2505.23523). This project is not the original algorithm, but a compiler and launch harness built around it.
